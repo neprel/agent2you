@@ -128,3 +128,12 @@ def test_shared_namespace_ports(tmp_path: Path) -> None:
     # network_mode and networks are mutually exclusive; render must emit neither
     # a networks: key on the service nor a top-level networks: block.
     assert "networks:" not in compose
+
+
+def test_bootstrap_ships_and_prints(capsys) -> None:
+    from a2y.cli import main
+
+    assert main(["bootstrap"]) == 0
+    out = capsys.readouterr().out
+    assert "# agent2you bootstrap" in out
+    assert "supervisor" in out

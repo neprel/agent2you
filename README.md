@@ -33,6 +33,30 @@ reason nothing here can quietly bill an API account.
 Nothing is shared between agents except memory (optional, bank-per-agent) and
 the chat workspace. Two agents cannot interfere with each other by construction.
 
+## Bootstrap: hand one prompt to a coding agent
+
+The fastest route is the **bootloader**: a self-contained prompt that turns
+Claude Code, Codex or any coding agent into the installer of your first fleet
+agent — the **supervisor**. It interviews you about *your* infrastructure
+(local docker or a remote host, Mattermost / Telegram / Slack / something
+else, Hindsight or no memory yet, subscriptions or a local endpoint), builds a
+fleet workspace to match, and walks you through the two steps no tool can do
+(platform accounts and device-code sign-ins) until the supervisor answers in
+your chat.
+
+Tell your coding agent:
+
+```
+Run `uvx agent2you bootstrap` and follow what it prints.
+```
+
+(or fetch it yourself: `uvx agent2you bootstrap > BOOTSTRAP.md` and paste it.)
+
+The supervisor it leaves behind owns the fleet repository — the manifests in
+it are the fleet's discovery registry (who does what), and hiring the next
+agents happens by talking to it: it interviews you, prepares the new colleague
+with `a2y agent add`, commits, and hands you the one command to run.
+
 ## Quickstart
 
 ```bash

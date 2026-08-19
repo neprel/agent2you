@@ -61,6 +61,26 @@ plugins load. `mattermost` is the proven branch. The untagged-routing POLICY
 product — a new platform adds a binding that answers the policy's two
 questions, never a second copy of the rules.
 
+# decision The bootloader is a prompt, and the supervisor owns the fleet repo {#bootstrap}
+
+`a2y/bootstrap.md` (printed by `a2y bootstrap`, runnable without install via
+`uvx agent2you bootstrap`) is the pack's entry point: a harness-agnostic
+runbook that any coding agent executes to interview the operator and stand up
+the first agent -- the SUPERVISOR -- into whatever infrastructure exists. It is
+a prompt, not a script, on purpose: the variability it absorbs (platforms,
+hosts, memory backends, brain mixes) is judgment work; everything deterministic
+it delegates to `a2y` commands and verifies with real output.
+
+The supervisor's contract, encoded in its soul by the bootloader: it OWNS the
+fleet repository (single source of truth, nobody else edits it), it IS the
+discovery authority (descriptions in manifests feed the roster and cards, so
+owning the repo is owning "who does what"), and it HIRES via docs/hiring.md +
+`a2y agent add`. Division of labor is absolute: the supervisor edits, renders
+and commits INSIDE its container; image builds and container starts happen
+OUTSIDE (operator or CI) -- no docker socket ever enters an agent. `a2y` is
+baked into the image (AGENT2YOU_VERSION) for exactly this; when releasing,
+remember that ARG must name a version that exists on PyPI.
+
 # decision Agent creation is non-interactive on purpose {#agent_add}
 
 `a2y agent add` takes everything as flags/JSON and prints a numbered next-steps

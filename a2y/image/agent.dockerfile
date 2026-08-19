@@ -80,6 +80,12 @@ ARG FASTAPI_VERSION=0.135.0
 ARG SPECIFY_VERSION=0.16.4
 ARG OPENSPEC_VERSION=1.9.0
 ARG YARN_VERSION=4.18.0
+# The pack's own CLI, inside every agent: a supervisor agent edits manifests,
+# runs `a2y agent add` / `a2y render` and commits -- inside its container,
+# against the fleet workspace cloned into /work. Building images and starting
+# containers stay OUTSIDE (no docker socket in here, ever); the supervisor
+# prepares, the operator or CI executes.
+ARG AGENT2YOU_VERSION=1.3.0
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -143,6 +149,8 @@ RUN npm install -g --include=optional --no-fund --no-audit \
 # then makes yarn 4 the default for repositories that declare nothing.
 RUN rm -f /usr/local/bin/yarn /usr/local/bin/yarnpkg \
     && uv tool install --no-cache "specify-cli==${SPECIFY_VERSION}" \
+    && uv tool install --no-cache "agent2you==${AGENT2YOU_VERSION}" \
+    && a2y --version \
     && corepack enable \
     && corepack prepare "yarn@${YARN_VERSION}" --activate \
     && specify --help >/dev/null \

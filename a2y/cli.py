@@ -1,5 +1,6 @@
 """The a2y command line.
 
+    a2y bootstrap               print the bootloader prompt for a coding agent
     a2y init <dir> [--name N]   create a fleet workspace
     a2y agent add <name> ...    add an agent (non-interactive; see docs/hiring.md)
     a2y agent list              list agents
@@ -38,6 +39,18 @@ def _compose(fleet: Fleet, *args: str) -> int:
         cmd += ["--env-file", str(env_file)]
     cmd += list(args)
     return subprocess.call(cmd)
+
+
+def cmd_bootstrap(_: argparse.Namespace) -> int:
+    """Print the bootloader: a self-contained prompt that turns any coding
+    agent into the installer of this operator's first fleet agent. Hand it to
+    Claude Code / Codex with: run `a2y bootstrap` and follow what it prints —
+    or fetch it without installing anything:
+    `uvx agent2you bootstrap`."""
+    from importlib import resources
+
+    sys.stdout.write((resources.files("a2y") / "bootstrap.md").read_text())
+    return 0
 
 
 def cmd_init(ns: argparse.Namespace) -> int:
@@ -234,6 +247,9 @@ def main(argv: list[str] | None = None) -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--version", action="version", version=f"a2y {__version__}")
     sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("bootstrap", help="print the bootloader prompt for a coding agent")
+    p.set_defaults(fn=cmd_bootstrap)
 
     p = sub.add_parser("init", help="create a fleet workspace")
     p.add_argument("dir")
