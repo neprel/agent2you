@@ -131,7 +131,12 @@ def cmd_agent_add(ns: argparse.Namespace) -> int:
     p = agent.env_prefix
     print(f"\n=== next steps for {name} ===")
     step = 1
-    print(f"  {step}. add to deploy/.env: {p}_LITELLM_MASTER_KEY=<random>"); step += 1
+    if agent.litellm_enabled:
+        print(f"  {step}. add to deploy/.env: {p}_LITELLM_MASTER_KEY=<random>"); step += 1
+    for ex in agent.openai_chain():
+        key_env = agent.executors[ex].get("api_key_env")
+        if key_env:
+            print(f"  {step}. set {key_env} in deploy/.env (key for the {ex} endpoint)"); step += 1
     if fleet.platform_kind == "mattermost":
         print(f"  {step}. `a2y provision {name}` -- create the Mattermost account, then set")
         print(f"     {p}_MATTERMOST_TOKEN, {p}_MATTERMOST_HOME_CHANNEL (and empty {p}_MATTERMOST_CHANNELS)")

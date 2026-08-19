@@ -250,8 +250,12 @@ def render_hermes_config(agent: Agent) -> str:
     if fleet.observability.get("phoenix_url"):
         plugins.append("hermes_otel")
 
-    data: dict = {
-        "model": {
+    # Where Hermes' one model actually points follows the topology:
+    #   litellm on            -> the chain, behind litellm
+    #   single ACP brain      -> straight at acp2api (no litellm to run)
+    #   single openai brain   -> straight at the endpoint (neither process)
+    if agent.litellm_enabled:
+        model_block = {
             "provider": "custom",
             "default": "brain",
             "base_url": "${LITELLM_BASE_URL}",
@@ -260,7 +264,25 @@ def render_hermes_config(agent: Agent) -> str:
             # litellm reports it as "No connected db.", which reads as a broken
             # proxy rather than bad auth.
             "api_key": "${LITELLM_MASTER_KEY}",
-        },
+        }
+    elif agent.acp2api_enabled:
+        model_block = {
+            "provider": "custom",
+            "default": agent.chain[0],
+            "base_url": "${ACP2API_BASE_URL}",
+            # acp2api has no auth (loopback); Hermes still wants a word.
+            "api_key": "none-required",
+        }
+    else:
+        spec = agent.executors[agent.chain[0]]
+        model_block = {
+            "provider": "custom",
+            "default": spec["model"],
+            "base_url": spec["base_url"],
+            "api_key": f"${{{spec['api_key_env']}}}" if spec.get("api_key_env") else "none-required",
+        }
+    data: dict = {
+        "model": model_block,
         "agent": {
             "max_turns": 90,
             "verbose": False,
@@ -306,12 +328,20 @@ def render_hermes_config(agent: Agent) -> str:
 
 
 def render_agent_yaml(agent: Agent) -> str:
-    """The runtime identity file the entrypoint reads (and /fleet roster scans)."""
+    """The runtime identity file the entrypoint reads (and /fleet roster scans).
+
+    Only the ports of components this agent actually runs appear here -- the
+    entrypoint and supervisord assemble the process list from exactly this."""
     ports = agent.ports()
+    port_map: dict = {"a2a": ports["a2a"]}
+    if agent.acp2api_enabled:
+        port_map["acp2api"] = ports["acp2api"]
+    if agent.litellm_enabled:
+        port_map["litellm"] = ports["litellm"]
     data: dict = {
         "name": agent.name,
         "description": agent.description,
-        "ports": {"acp2api": ports["acp2api"], "litellm": ports["litellm"], "a2a": ports["a2a"]},
+        "ports": port_map,
     }
     if agent.fleet.platform_kind == "mattermost":
         data["mattermost"] = {
@@ -386,15 +416,22 @@ def _agent_service(agent: Agent) -> dict:
         # Claude Code splits state between ~/.claude and ~/.claude.json; without
         # this a container replacement loses the account while appearing not to.
         "CLAUDE_CONFIG_DIR": "/root/.claude",
-        "LITELLM_MASTER_KEY": f"${{{p}_LITELLM_MASTER_KEY}}",
-        # Where Hermes looks for its bearer when model.base_url is set. Never a
-        # real provider key -- a real one here would let codex quietly bill an
-        # API account instead of spending the subscription.
-        "OPENAI_API_KEY": f"${{{p}_LITELLM_MASTER_KEY}}",
         # cline reinstalls itself from `latest` at startup, defeating the image
         # pin and briefly deleting its own binary. This stops it.
         "CLINE_NO_AUTO_UPDATE": "1",
     }
+    if agent.litellm_enabled:
+        env["LITELLM_MASTER_KEY"] = f"${{{p}_LITELLM_MASTER_KEY}}"
+        # Where Hermes looks for its bearer when model.base_url is set. Never a
+        # real provider key -- a real one here would let codex quietly bill an
+        # API account instead of spending the subscription.
+        env["OPENAI_API_KEY"] = f"${{{p}_LITELLM_MASTER_KEY}}"
+    # kind: openai executors read their key from a named variable; pass each
+    # through from .env. Deliberately never OPENAI_API_KEY (validated).
+    for ex in agent.openai_chain():
+        key_env = agent.executors[ex].get("api_key_env")
+        if key_env:
+            env[key_env] = f"${{{key_env}}}"
     if fleet.platform_kind == "mattermost":
         env.update({
             "MATTERMOST_URL": "${A2Y_MATTERMOST_URL}",
@@ -481,10 +518,13 @@ def _agent_service(agent: Agent) -> dict:
         "environment": [f"{k}={v}" for k, v in env.items()],
         "volumes": volumes,
         "healthcheck": {
-            # litellm's liveness: the only probe that is both unauthenticated and
-            # meaningless to fake. acp2api shows up here as a failed request.
-            "test": ["CMD-SHELL",
-                     ". /run/agent.env && curl -fsS http://127.0.0.1:$$LITELLM_PORT/health/liveliness || exit 1"],
+            # Probe the topmost brain-path process this agent actually runs;
+            # Hermes itself is watched through the A2A card when it is alone.
+            "test": ["CMD-SHELL", ". /run/agent.env && curl -fsS " + (
+                "http://127.0.0.1:$$LITELLM_PORT/health/liveliness" if agent.litellm_enabled
+                else "http://127.0.0.1:$$ACP2API_PORT/health" if agent.acp2api_enabled
+                else "http://127.0.0.1:$$A2A_PORT/.well-known/agent-card.json"
+            ) + " || exit 1"],
             "interval": "30s",
             "timeout": "10s",
             "retries": 3,
@@ -549,11 +589,21 @@ def render_example_env(fleet: Fleet) -> str:
             f"A2Y_PHOENIX_URL={fleet.observability['phoenix_url']}",
             "",
         ]
+    key_envs = sorted({
+        str(a.executors[ex]["api_key_env"])
+        for a in fleet.agents for ex in a.openai_chain()
+        if a.executors[ex].get("api_key_env")
+    })
+    if key_envs:
+        lines.append("# --- API keys for kind: openai executors ---")
+        lines += [f"{k}=" for k in key_envs]
+        lines.append("")
     for a in fleet.agents:
         p = a.env_prefix
         lines.append(f"# --- {a.name} ---")
-        lines.append(f"# Internal bearer between Hermes -> litellm -> acp2api. Not a provider key.")
-        lines.append(f"{p}_LITELLM_MASTER_KEY=")
+        if a.litellm_enabled:
+            lines.append(f"# Internal bearer between Hermes -> litellm -> acp2api. Not a provider key.")
+            lines.append(f"{p}_LITELLM_MASTER_KEY=")
         if fleet.platform_kind == "mattermost":
             lines.append(f"{p}_MATTERMOST_TOKEN=")
             lines.append(f"# Channel the agent posts to UNPROMPTED (cron, alerts). Exactly one.")
@@ -662,9 +712,13 @@ def render_fleet(fleet: Fleet, out: Path | None = None) -> list[str]:
             "agent.yaml": render_agent_yaml(agent),
             "SOUL.md": _soul(agent),
             "config.yaml": render_hermes_config(agent),
-            "acp2api.yaml": render_acp2api(agent),
-            "litellm.yaml": render_litellm(agent),
         }
+        # A config file's presence is what makes the entrypoint start the
+        # process -- topology is data, not a switch somewhere else.
+        if agent.acp2api_enabled:
+            files["acp2api.yaml"] = render_acp2api(agent)
+        if agent.litellm_enabled:
+            files["litellm.yaml"] = render_litellm(agent)
         if fleet.memory_kind == "hindsight" and agent.memory.get("personal", True):
             files["hindsight.json"] = render_hindsight(agent)
         overrides = agent.dir / "overrides"

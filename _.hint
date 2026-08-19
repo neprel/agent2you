@@ -21,6 +21,21 @@ that is the LEGAL basis, not an optimisation). Do not split the layers into
 shared services and do not "simplify" the two python virtualenvs into one
 (Hermes exact-pins its tree; litellm pins ranges over the same packages).
 
+# decision The stack is assembled per agent from the chain {#topology}
+
+acp2api runs iff an ACP executor exists; litellm runs iff there is a failover
+decision to make (`brains.litellm: auto` = chain of 2+; on/off override, YAML
+booleans normalized); a single `kind: openai` brain is Hermes pointed straight
+at the endpoint with neither process. The on-switch is FILE PRESENCE: the
+entrypoint installs a supervisor section iff its config was rendered into
+/config, and the compose healthcheck probes the topmost process that exists.
+Do not add a parallel enable-flag mechanism — two sources of truth for what
+runs is how they diverge. Chains are any length and per-agent; `kind: openai`
+executors join a litellm chain as ordinary members. Guard rails, validated:
+litellm off + chain>1 is an error, and an openai executor's api_key_env must
+never be OPENAI_API_KEY (that name carries the litellm master key so no real
+provider key can be billed by accident).
+
 # decision Configs are generated, not hand-written {#render}
 
 `a2y render` is deterministic: same manifests, same bytes. The deploy tree is

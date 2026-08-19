@@ -1,0 +1,5 @@
+Per-program supervisor sections. The entrypoint installs into
+/etc/supervisor/conf.d only the ones whose config was rendered for this
+agent: hermes and fleet-roster always, acp2api when /config/acp2api.yaml
+exists, litellm when /config/litellm.yaml exists. Topology is data -- the
+presence of a rendered config file IS the on-switch.

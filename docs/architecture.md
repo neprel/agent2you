@@ -23,6 +23,22 @@ property that was the reason to build it. Do not "clean this up" into shared
 services: the isolation — own CLIs, own logins, own workspace, own quota — is
 what makes it safe to give an agent a chat account and a shell.
 
+**The stack is assembled per agent, not assumed.** A layer whose property an
+agent does not need is not started for it:
+
+| chain in the manifest | what runs |
+| --- | --- |
+| 2+ executors (any mix, any order, any length) | Hermes → litellm → acp2api (+ direct endpoints in the same litellm chain) |
+| one coding CLI | Hermes → acp2api; litellm is skipped (nothing to fail over between) |
+| one `kind: openai` endpoint (a vLLM, a paid API) | Hermes straight at the endpoint; neither acp2api nor litellm runs |
+
+`brains.litellm: auto|on|off` overrides the default (`auto` = on for a chain of
+2+). The mechanism is deliberately dumb: a process runs iff its config file was
+rendered into `/config` — the entrypoint assembles the supervisor process list
+from file presence, and the healthcheck probes the topmost process that exists
+(litellm → acp2api → the A2A card). Fallback order is the chain's order, per
+agent, with no length limit.
+
 The **image bakes everything in and pins every version**; the logins live in
 volumes so a rebuild never signs an agent out; the **identity (config, SOUL) is
 copied from the deploy tree on every start**, overwriting whatever the volume

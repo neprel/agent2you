@@ -113,6 +113,48 @@ class Agent:
     def toolkits(self) -> list[str]:
         return [str(t) for t in (self.raw.get("toolkits") or [])]
 
+    # ---- brain topology --------------------------------------------------
+    # The stack is assembled per agent from the chain, not assumed:
+    #   * acp2api runs only when an ACP executor (a coding CLI) exists;
+    #   * litellm runs only when there is a failover decision to make --
+    #     `brains.litellm: auto` (default) means on for a chain of 2+, off for
+    #     a single brain; `on`/`off` override either way;
+    #   * a single `kind: openai` brain is Hermes pointed straight at the
+    #     endpoint: no acp2api, no litellm, two processes fewer.
+
+    def _kind(self, name: str) -> str:
+        return self.executors[name].get("kind") or name
+
+    def acp_chain(self) -> list[str]:
+        return [n for n in self.chain if self._kind(n) != "openai"]
+
+    def openai_chain(self) -> list[str]:
+        return [n for n in self.chain if self._kind(n) == "openai"]
+
+    @property
+    def acp2api_enabled(self) -> bool:
+        return bool(self.acp_chain())
+
+    @property
+    def litellm_mode(self) -> str:
+        """auto | on | off. YAML 1.1 reads bare `on`/`off` as booleans, so both
+        spellings are accepted and normalized."""
+        raw = self.brains.get("litellm", "auto")
+        if raw is True:
+            return "on"
+        if raw is False:
+            return "off"
+        return str(raw)
+
+    @property
+    def litellm_enabled(self) -> bool:
+        mode = self.litellm_mode
+        if mode == "on":
+            return True
+        if mode == "off":
+            return False
+        return len(self.chain) > 1
+
     @property
     def hermes_env(self) -> list[str]:
         """Extra container variables to cross into Hermes' own .env."""
@@ -149,8 +191,25 @@ class Agent:
                 )
             if kind == "custom" and not spec.get("command"):
                 raise ManifestError(f"{where}: executor {name!r} is kind custom and needs `command`")
-            if kind == "openai" and not spec.get("base_url"):
-                raise ManifestError(f"{where}: executor {name!r} is kind openai and needs `base_url`")
+            if kind == "openai":
+                if not spec.get("base_url") or not spec.get("model"):
+                    raise ManifestError(
+                        f"{where}: executor {name!r} is kind openai and needs `base_url` and `model`"
+                    )
+                if spec.get("api_key_env") == "OPENAI_API_KEY":
+                    raise ManifestError(
+                        f"{where}: executor {name!r}: api_key_env must not be OPENAI_API_KEY -- "
+                        "inside the container that variable carries the litellm master key so "
+                        "no real provider key can be billed by accident; pick a distinct name"
+                    )
+        mode = self.litellm_mode
+        if mode not in ("auto", "on", "off"):
+            raise ManifestError(f"{where}: brains.litellm must be auto, on or off (got {mode!r})")
+        if mode == "off" and len(self.chain) > 1:
+            raise ManifestError(
+                f"{where}: brains.litellm is off but the chain has {len(self.chain)} executors -- "
+                "nothing could fail over between them; drop to one executor or let litellm run"
+            )
 
 
 @dataclass

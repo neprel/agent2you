@@ -51,8 +51,13 @@ PY
 )"
     # The healthcheck runs as a fresh exec and inherits compose's environment,
     # not ours -- so the resolved values are written where it can source them.
-    { echo "LITELLM_PORT=${LITELLM_PORT}"; echo "ACP2API_PORT=${ACP2API_PORT}"; } > /run/agent.env
-    log "  ${AGENT_NAME}: acp2api :${ACP2API_PORT}, litellm :${LITELLM_PORT}"
+    # Only the ports of components this agent actually runs appear (agent.yaml
+    # is rendered that way), and the healthcheck probes the topmost one.
+    : > /run/agent.env
+    for v in LITELLM_PORT ACP2API_PORT A2A_PORT; do
+        [ -n "${!v:-}" ] && echo "$v=${!v}" >> /run/agent.env
+    done
+    log "  ${AGENT_NAME}: acp2api :${ACP2API_PORT:--}, litellm :${LITELLM_PORT:--}, a2a :${A2A_PORT:--}"
 else
     log "  no agent.yaml -- relying entirely on the environment"
 fi
@@ -286,7 +291,26 @@ if [ -n "${A2Y_HERMES_ENV_EXTRA:-}" ]; then
 fi
 log "  $(wc -l < "${HERMES_HOME}/.env") variable(s)"
 
-log "Step 5: Starting acp2api :${ACP2API_PORT}, litellm :${LITELLM_PORT}, hermes gateway"
+log "Step 5: Assembling the process list from what was rendered"
+# Topology is data: a process runs iff its config file was rendered into
+# /config. hermes and the roster always run; acp2api only when an ACP executor
+# exists; litellm only when there is a failover decision to make. An agent
+# pointed straight at an OpenAI endpoint runs neither of the lower two.
+rm -f /etc/supervisor/conf.d/a2y-*.conf
+mkdir -p /etc/supervisor/conf.d
+enabled=""
+for prog in hermes fleet-roster; do
+    install -m 0644 "/opt/agent/supervisord.d/${prog}.conf" "/etc/supervisor/conf.d/a2y-${prog}.conf"
+    enabled="${enabled} ${prog}"
+done
+[ -f "${AGENT_CONFIG_DIR}/acp2api.yaml" ] \
+    && install -m 0644 /opt/agent/supervisord.d/acp2api.conf /etc/supervisor/conf.d/a2y-acp2api.conf \
+    && enabled="${enabled} acp2api"
+[ -f "${AGENT_CONFIG_DIR}/litellm.yaml" ] \
+    && install -m 0644 /opt/agent/supervisord.d/litellm.conf /etc/supervisor/conf.d/a2y-litellm.conf \
+    && enabled="${enabled} litellm"
+log "  starting:${enabled}"
+
 # supervisord in the foreground so it receives SIGTERM directly and stops the
 # children in order. It is not PID 1 -- tini is -- because the coding CLIs spawn
 # ACP and MCP subprocesses supervisord never learns about and would never reap.

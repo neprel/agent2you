@@ -213,7 +213,10 @@ COPY fleet-roster.py /opt/agent/bin/fleet-roster.py
 # Pushes each bank's mission into Hindsight, which the Hermes plugin reads from
 # config and never applies itself.
 COPY apply-memory-profile.py /opt/agent/bin/apply-memory-profile.py
-COPY supervisord.conf /etc/supervisor/conf.d/agent.conf
+# Per-program sections, assembled by the entrypoint: hermes and fleet-roster
+# always; acp2api and litellm only when their config was rendered for this
+# agent. An agent pointed straight at an OpenAI endpoint runs neither.
+COPY supervisord.d /opt/agent/supervisord.d
 COPY bashrc /root/.bashrc
 RUN chmod +x /opt/agent/bin/entrypoint.sh /opt/agent/bin/fleet-roster.py \
         /opt/agent/bin/apply-memory-profile.py \
