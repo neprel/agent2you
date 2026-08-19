@@ -10,7 +10,7 @@ through the `update_bank` MCP tool, in one pass on 2026-08-14.
 
 That went wrong in both directions at once, which is what a hand-set profile does:
 
-  * `one agent`'s bank was created the day AFTER that pass, so it had no mission
+  * one agent's bank was created the day AFTER that pass, so it had no mission
     and no retain mission at all. It had been extracting memory unsteered ever
     since, and nothing said so.
   * the two banks that were set by hand drifted AHEAD of the repository — 841
@@ -25,7 +25,7 @@ live value alone. That is deliberate — a half-filled config must not silently 
 mission somebody tuned through the API. To remove one, do it explicitly through the
 API and remove it from the file too.
 
-Failure is never fatal. Memory is not load-bearing here (ai/_.hint#agent_memory);
+Failure is never fatal. Memory is deliberately not load-bearing here;
 an agent whose bank profile could not be updated is an agent with a stale mission,
 not a broken one.
 

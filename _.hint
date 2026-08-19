@@ -5,10 +5,10 @@ the `a2y` python package (manifest loading, deterministic rendering, CLI) and
 `a2y/image/` (the agent container: dockerfile, entrypoint, supervisord, Hermes
 plugins), which `a2y init` vendors into each fleet workspace.
 
-The design is extracted from a production fleet in the operator's `the source deployment`
-repository (`the source fleet/`); that repo's `.hint` files carry the measurements
-behind most rules here. When this pack and the source deployment disagree, check whether the source deployment
-learned something new — or whether the pack generalised something the source deployment had
+The design is extracted from the author's production fleet (a private
+repository), whose knowledge base carries the measurements behind most rules
+here. When this pack and that deployment disagree, check whether the fleet
+learned something new — or whether the pack generalised something it had
 hardcoded.
 
 # decision One agent is one container, and the stack inside is fixed {#one_container}

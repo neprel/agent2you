@@ -58,11 +58,12 @@ DEBOUNCE_SECONDS = float(os.getenv("MATTERMOST_EDIT_DEBOUNCE_SECONDS", "15"))
 # Only these authors' edits wake the agent. Added 2026-08-16 after this plugin
 # cost a 248-second codex turn on a status message, and then broke the reply.
 #
-# What happened: agent A' PROGRESS BUBBLE -- the post Hermes edits in place while
-# a turn runs -- narrated its investigation, and the narration contained the text
-# `@agent B`. This plugin does not know chrome from conversation, so it woke agent B
-# on it (45,194 prompt tokens, four minutes). agent A then DELETED the bubble,
-# as `cleanup_progress: true` is meant to; by the time agent B answered, the post it
+# What happened: one agent's PROGRESS BUBBLE -- the post Hermes edits in place
+# while a turn runs -- narrated its investigation, and the narration contained a
+# colleague's `@name`. This plugin does not know chrome from conversation, so it
+# woke that colleague (45,194 prompt tokens, four minutes). The first agent then
+# DELETED the bubble, as `cleanup_progress: true` is meant to; by the time the
+# colleague answered, the post it
 # had been given as its thread root did not exist, Mattermost refused the reply
 # with `Invalid RootId parameter`, and the answer landed flat under
 # "⚠️ Mattermost thread delivery failed". Three visible faults, one cause.
