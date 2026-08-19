@@ -1,0 +1,63 @@
+# app Hermes plugins shipped in the agent image
+
+Six plugins, each closing a measured gap in upstream Hermes. None is
+decoration: before removing one, check the retirement condition below against
+the CURRENT upstream source — enumeration of features in release notes is not
+evidence; the adapter code is.
+
+Last full audit against upstream main: **2026-08-19** (v2026.8.18, ~30k-line
+gateway grepped, quotes verified). Verdict: **all six gaps still open** for the
+Mattermost path. Details per plugin:
+
+* **conversation-key** — puts Hermes' session id on the wire as
+  `x-conversation-id`. Upstream custom providers gained only STATIC
+  `extra_headers` (fixed per profile, `normalize_extra_headers`), nothing per
+  session. Retire when Hermes sends a per-conversation id natively, or when
+  acp2api keys sessions from ACP `_meta` end to end.
+* **mention-on-edit** — adapter still handles only `event == "posted"`
+  (`plugins/platforms/mattermost/adapter.py`); `post_edited` appears nowhere.
+  Scoped to HUMAN authors on purpose: an agent's progress bubble once woke a
+  colleague mid-edit (three faults from one cause). Retire when upstream
+  processes `post_edited`.
+* **untagged-routing** — upstream now has `ThreadParticipationTracker`
+  ("follow-up messages in bot-participated threads need no mention") wired
+  into **Discord, Slack, Matrix only**, plus `profile_routing.py` which maps
+  already-accepted messages to profiles and claims nothing. The Mattermost
+  adapter uses neither, and room-ownership (rule 4) exists nowhere upstream.
+  Keep for Mattermost; for a Discord/Slack/Matrix fleet compare against the
+  tracker before porting the binding. Upstreaming a patch that wires the
+  tracker into the Mattermost adapter would retire rule 2 (thread ownership)
+  only — rules 1, 3, 4 (humans-only, solo group DM, room owners) stay ours.
+* **reasoning-live** — `reasoning_callback` is still assigned only by the CLI;
+  zero occurrences under `gateway/`. Chat platforms drop reasoning deltas
+  without this. Retire when the gateway subscribes.
+* **steer-into-turn** — upstream `steer()` still only queues for the next
+  model call, which never comes when one call is the whole ACP turn. The one
+  native exception is Codex app-server's `turn/steer` — irrelevant here, the
+  brains sit behind acp2api as `provider: custom`. Retire if Hermes grows an
+  HTTP steering sidechannel for custom providers.
+* **trace-to-card** — also supplies `delete_message`, which the Mattermost
+  adapter still lacks (google_chat/slack/telegram have it); without it the
+  gateway silently disables `display.cleanup_progress`
+  (`base.py`: TTL cleanup skipped when the adapter does not override).
+
+Note when reading upstream: PyPI `hermes-agent` (0.19.0, 2026-07-20) is a
+month and several releases behind main — audit against main or the latest tag,
+never against pip.
+
+# bad Patterns these plugins already paid for {#plugin_traps}
+
+* A monkeypatched method must present the WRAPPED signature — Hermes inspects
+  it; a `**kwargs` wrapper advertises parameters the real method lacks and
+  every call dies in a caught-and-logged handler, invisibly.
+* Patch the adapter class found via `sys.modules`, never by importing its file
+  path — plugins load under `hermes_plugins.<slug>`, so a path import yields a
+  second, unrelated class that patches cleanly and changes nothing.
+* A module run through `spec_from_file_location` must be in `sys.modules`
+  BEFORE `exec_module`, or `@dataclass` dies on a NoneType error naming
+  neither the file nor dataclasses.
+* Log at WARNING or above — this container emits nothing quieter, and a
+  refusal logged at INFO is indistinguishable from a plugin that never loaded.
+* Anything that rewrites the final post must patch BOTH delivery paths (edit
+  of the streamed preview AND `send`) — patching only `edit_message` passes
+  tests and never fires in production.
