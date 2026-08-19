@@ -77,6 +77,22 @@ to drift apart, and neither may live in a volume. Do not add tools to agents
 any other way (hand-edited compose images, exec-time installs) — an install at
 runtime is the ai-router mistake the one-container decision buried.
 
+# decision A SOUL.md is short, and conduct is shared {#soul_philosophy}
+
+A soul carries identity, scope, non-goals and agent-specific rules ONLY.
+Fleet-wide conduct lives in SOUL-shared.md (rendered into everyone), tool
+instructions in toolkit USAGE, operational knowledge in .hint files. Reasons,
+all evidenced: every soul line is resent on every turn; long personas
+measurably spend MORE reasoning tokens fighting themselves (the honey
+measurement, and a 1400-line-persona report of 10x token burn); and vague
+lines ("you have a tone") or grammatically broken bullets read as noise or
+mislead the model. Write complete imperative sentences. The shared conduct
+includes two rules born from measured fleet failures: self-reporting is not
+evidence, and invoke-before-denying (enumeration is narration). Do not grow
+skeletons back into personality essays, and do not put delegation matrices or
+reasoning-loop rituals into souls -- routing is structural (untagged-routing,
+roster) and the coding CLIs run their own loops.
+
 # invariant example.env is complete {#env_parity}
 
 The generated `example.env` names every variable the compose file references,

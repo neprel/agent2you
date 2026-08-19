@@ -44,7 +44,12 @@ open-ended-ask. One question per message works best in chat.
 7. **Where it lives** — which channel is home, and does it own the room's
    untagged messages? (home channel goes to `.env`; room ownership is an edit
    to `A2Y_ROOM_OWNERS`.)
-8. **Soul** — draft SOUL.md from the answers: scope, non-goals, how it works.
+8. **Soul** — draft SOUL.md from the answers: identity, scope, non-goals, and
+   only the rules specific to this agent. Keep it SHORT and in complete
+   imperative sentences — fleet-wide conduct already arrives via
+   SOUL-shared.md, tool instructions via toolkit USAGE, operational knowledge
+   via .hint files. Every soul line is paid on every turn, and long personas
+   measurably fight themselves (more reasoning tokens, not better behavior).
    Show the draft, get an edit or an ok.
 
 ## The call

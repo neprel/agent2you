@@ -27,15 +27,18 @@ SOUL_SKELETON = """\
 
 You are {name}. {description}
 
+Keep this file SHORT: identity, scope, non-goals, and the few rules specific to
+you. Fleet-wide conduct arrives from SOUL-shared.md; tool instructions from
+toolkit USAGE sections; operational knowledge lives in .hint files. Every line
+here is paid on every turn.
+
 ## Scope
 
 - What you own and answer for. Be precise: your colleagues route by this.
+
+## Out of scope
+
 - What you do NOT touch, even when convenient.
-
-## How you work
-
-- Never report success for a tool call that failed; quote the error instead.
-- "Posted" is not "delivered": a mention reaches only members of that channel.
 """
 
 
