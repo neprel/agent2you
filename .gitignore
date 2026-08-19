@@ -5,6 +5,7 @@ __pycache__/
 dist/
 build/
 .venv/
+.pytest_cache/
 
 # A fleet workspace created inside this repo for testing. Real fleets live in
 # their own repositories (see `a2y init`).

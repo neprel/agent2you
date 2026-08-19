@@ -46,6 +46,25 @@ plugins load. `mattermost` is the proven branch. The untagged-routing POLICY
 product — a new platform adds a binding that answers the policy's two
 questions, never a second copy of the rules.
 
+# decision Agent creation is non-interactive on purpose {#agent_add}
+
+`a2y agent add` takes everything as flags/JSON and prints a numbered next-steps
+checklist. The INTERACTIVE layer is a fleet agent interviewing the operator in
+chat (docs/hiring.md) and then making one tool call — do not add a TUI wizard;
+that would put a second, worse conversation surface next to the one the fleet
+already is. The command validates against the whole fleet and rolls back on
+failure, so a bad call leaves no half-created agent.
+
+# decision Releases are trusted-publishing, actions pinned by SHA {#release}
+
+PyPI publishing uses OIDC trusted publishing: no API token exists anywhere, so
+there is nothing for a compromised dependency to steal — the lesson of the
+litellm 1.82.x incident, where the victim's own publish pipeline was the way
+in. GitHub Actions are referenced by commit SHA with the tag in a comment;
+bumping one means resolving the new tag's COMMIT sha (annotated tags point at a
+tag object — dereference it), never trusting the tag name. The release
+workflow gates on the test suite and on tag == pyproject version.
+
 # invariant example.env is complete {#env_parity}
 
 The generated `example.env` names every variable the compose file references,
@@ -91,8 +110,10 @@ content-free `-32603`). Bumping `LITELLM_VERSION` requires checking
 
 # build
 
-`uv run --with pyyaml python -m a2y.cli --help` runs the CLI from a checkout.
-Smoke test: `a2y init /tmp/f && cd /tmp/f && a2y render` then
-`docker compose -f deploy/docker-compose.yaml config -q` with a filled `.env`.
-There is no test suite yet; when one lands it must cover render determinism
-(two runs, identical bytes) and the manifest validation errors.
+`uv run --group dev pytest` is the gate — it covers render determinism (two
+runs, identical bytes), loud validation, the env-parity invariant, override
+replacement, shared-namespace ports, and `agent add` rollback. `uv build` must
+keep shipping `a2y/image/**` as package data (the wheel is what `a2y init`
+vendors from); a change that drops it breaks init only at the user's machine.
+Full smoke: init a workspace, render, `docker compose config -q` with a filled
+`.env`.

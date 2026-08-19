@@ -1,6 +1,8 @@
 """The a2y command line.
 
     a2y init <dir> [--name N]   create a fleet workspace
+    a2y agent add <name> ...    add an agent (non-interactive; see docs/hiring.md)
+    a2y agent list              list agents
     a2y render                  manifests -> deploy/
     a2y build                   build the agent image from ./image
     a2y up [agent ...]          ensure volumes, then docker compose up -d
@@ -220,6 +222,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--name", help="fleet name (default: directory name)")
     p.add_argument("--agent", default="ana", help="name of the first agent (default: ana)")
     p.set_defaults(fn=cmd_init)
+
+    from .agents_cmd import register as register_agent_cmd
+    register_agent_cmd(sub)
 
     p = sub.add_parser("render", help="manifests -> deploy/")
     p.set_defaults(fn=cmd_render)

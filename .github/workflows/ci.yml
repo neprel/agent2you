@@ -1,0 +1,23 @@
+# CI: the test suite on every push and PR.
+#
+# Actions are pinned by COMMIT SHA, not by mutable tag. A tag can be moved onto
+# a poisoned release after the fact; a sha cannot. This posture comes from a
+# real supply-chain incident analysis (litellm 1.82.x): the break-in was an
+# unpinned tool in the victim's own publish pipeline.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: astral-sh/setup-uv@eb1897b8dc4b5d5bfe39a428a8f2304605e0983c # v7.0.0
+      - name: Run tests
+        run: uv run --group dev pytest -q
+      - name: Package builds
+        run: uv build

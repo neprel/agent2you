@@ -1,0 +1,47 @@
+# Release to PyPI on a version tag (v1.0.0, v1.0.1, ...).
+#
+# Publishing uses PyPI TRUSTED PUBLISHING (OIDC): no API token exists anywhere
+# -- not in secrets, not on a laptop -- so there is nothing for a compromised
+# dependency to steal. GitHub mints a short-lived identity token; PyPI accepts
+# it only from THIS repository, THIS workflow file, THIS environment.
+#
+# One-time setup on PyPI (pypi.org -> account -> Publishing -> add a pending
+# publisher): project `agent2you`, owner `neprel`, repository `agent2you`,
+# workflow `release.yml`, environment `pypi`. Then create the `pypi`
+# environment in the GitHub repo settings.
+#
+# To release: bump `version` in pyproject.toml, commit, then
+#   git tag v<version> && git push origin main --tags
+#
+# Actions pinned by commit SHA on purpose -- see ci.yml for why.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write   # the whole credential story; nothing else is needed
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: astral-sh/setup-uv@eb1897b8dc4b5d5bfe39a428a8f2304605e0983c # v7.0.0
+
+      - name: Tag must match pyproject version
+        run: |
+          v="$(grep -m1 '^version' pyproject.toml | cut -d'"' -f2)"
+          [ "v${v}" = "${GITHUB_REF_NAME}" ] || {
+            echo "tag ${GITHUB_REF_NAME} != pyproject version v${v}"; exit 1; }
+
+      - name: Tests gate the release
+        run: uv run --group dev pytest -q
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Publish to PyPI (trusted publishing)
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0

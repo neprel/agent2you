@@ -36,7 +36,7 @@ the chat workspace. Two agents cannot interfere with each other by construction.
 ## Quickstart
 
 ```bash
-uv tool install /path/to/agent2you     # or: pipx install /path/to/agent2you
+uv tool install agent2you               # or: pipx install agent2you
 
 a2y init myfleet && cd myfleet          # a self-contained fleet workspace
 $EDITOR fleet.yaml agents/ana/          # who exists, what platform, what memory
@@ -50,11 +50,21 @@ a2y auth ana                            # sign the brains in (once; survives reb
 a2y doctor                              # end-to-end checks
 ```
 
-Adding a colleague later is: `mkdir agents/<name>`, write `agent.yaml` +
-`SOUL.md`, `a2y render`, add its two secrets to `.env`, `a2y up <name>` — and
-recreate the others only because the platform allowlist is container
-environment. Running agents discover the newcomer without a restart: the fleet
-roster in every SOUL.md regenerates on a loop from the mounted manifests.
+Adding a colleague later is one command:
+
+```bash
+a2y agent add acme-pm \
+  --description "Project manager for acme: specs, tasks, sequencing." \
+  --github-token --projects acme
+```
+
+It validates against the whole fleet (rolling back on failure), re-renders
+`deploy/`, and prints the numbered checklist of what remains (secrets,
+provisioning, sign-in). The command is deliberately non-interactive so that
+**your own assistant agent can run it**: the interview happens in chat, the
+tool call is the answer — see [docs/hiring.md](docs/hiring.md). Running agents
+discover the newcomer without a restart: the fleet roster in every SOUL.md
+regenerates on a loop from the mounted manifests.
 
 ## The manifests
 
@@ -103,10 +113,24 @@ and `hermes:`/`acp2api:` keys in agent.yaml deep-merge into those configs.
 
 - [docs/architecture.md](docs/architecture.md) — the stack and every decision in it
 - [docs/provisioning.md](docs/provisioning.md) — accounts, tokens, sign-ins, keys
+- [docs/hiring.md](docs/hiring.md) — the interview an assistant agent runs to add a colleague
 - [docs/extending.md](docs/extending.md) — custom tools, platforms, derived images
+
+## Development and releasing
+
+```bash
+uv run --group dev pytest      # the contract: render determinism, validation, env parity
+uv build                       # sdist + wheel (the vendored image ships as package data)
+```
+
+Releases publish to PyPI via **trusted publishing** (OIDC — no API token exists
+anywhere): bump `version` in pyproject.toml, commit, `git tag v<version>`,
+`git push --tags`. The workflow gates on the test suite and on the tag matching
+the version. GitHub Actions are pinned by commit SHA, not by tag — a tag can be
+moved onto a poisoned release; a sha cannot.
 
 ## Status
 
-v0.1. Extracted from a running deployment; the mattermost + hindsight +
-claude/codex path is the proven one. Telegram/Slack/Discord pass through to
-Hermes' own adapters and are not yet exercised end to end by the maintainers.
+Extracted from a running deployment; the mattermost + hindsight + claude/codex
+path is the proven one. Telegram/Slack/Discord pass through to Hermes' own
+adapters and are not yet exercised end to end by the maintainers.

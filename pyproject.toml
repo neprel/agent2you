@@ -1,17 +1,38 @@
 [project]
 name = "agent2you"
-version = "0.1.0"
+version = "1.0.0"
 description = "Deploy a team of chat-resident AI agents from declarative manifests: Hermes + litellm + acp2api + subscription coding CLIs, one container per agent."
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = ["pyyaml>=6.0"]
+authors = [{ name = "neprel" }]
+keywords = ["agents", "ai", "hermes", "acp", "mattermost", "docker", "fleet", "claude-code", "codex"]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Intended Audience :: System Administrators",
+  "Operating System :: POSIX",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Build Tools",
+  "Topic :: System :: Systems Administration",
+]
+
+[project.urls]
+Homepage = "https://github.com/neprel/agent2you"
+Repository = "https://github.com/neprel/agent2you"
+Issues = "https://github.com/neprel/agent2you/issues"
 
 [project.scripts]
 a2y = "a2y.cli:main"
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
@@ -21,3 +42,6 @@ packages = ["a2y"]
 # The image build context is data: `a2y init` vendors it into each fleet
 # workspace, where it becomes the user's to edit.
 a2y = ["image/*", "image/**/*"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
