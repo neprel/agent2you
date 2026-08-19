@@ -1,0 +1,12 @@
+name: trace-to-card
+version: "1.0.0"
+description: >-
+  Lift the thinking and the progress trace out of a Mattermost post and into
+  `props.card`, so the post shows the answer and the work behind it is one click
+  away in the right-hand panel. Patches both delivery paths -- `send` and the
+  final `edit_message` -- because Hermes abandons a long-lived streaming preview
+  and posts the answer fresh. Prefers the whole trace from the reasoning-live
+  plugin over the fifteen lines Hermes prepends. Also implements
+  `delete_message`, which the stock adapter does not, and whose absence makes
+  `display.cleanup_progress` silently inert.
+author: the source deployment

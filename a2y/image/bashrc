@@ -1,0 +1,39 @@
+# For `docker exec -it agent-<name> bash`. Baked into the image rather than
+# generated at boot, because nothing in it depends on the deployment.
+export PATH="/opt/agent/hermes-agent/venv/bin:/opt/agent/litellm/bin:${PATH}"
+
+# The banner is for a HUMAN at a terminal -- and the coding agent runs every Bash
+# tool call through a shell that sources this file, so without the guard these
+# lines are prepended to the output of every command it runs, into its context,
+# on every call, forever. No tty, no banner.
+[ -t 1 ] || return 0
+
+cat <<'BANNER'
+This is an agent2you container: hermes + litellm + acp2api + claude/codex/opencode/cline.
+
+  supervisorctl status              what is running
+  supervisorctl restart hermes      after re-rendering config + restart
+
+Signing the coding CLIs in (the logins live in volumes and survive a rebuild):
+
+  claude          then /login -- pick "subscription", it prints a URL and a code
+  codex login --device-auth
+
+Do NOT use a browser-callback login. Those listen on 127.0.0.1 inside THIS
+network namespace, and your browser's localhost is a different machine entirely,
+so the callback can never arrive. The device-code flow has no such problem.
+
+The forges, same rule and same reason:
+
+  gh auth login --hostname github.com --git-protocol ssh
+                  pick "Login with a web browser": it prints a one-time code and
+                  a URL you open on YOUR machine. Say no to "authenticate git" if
+                  this agent pushes over its ssh deploy key.
+
+  tea login add --name <forge> --url <gitea-url> --token <token>
+                  gitea has no device flow; make the token in its web UI with
+                  only the scopes the agent needs -- "all" is a credential worth
+                  stealing.
+
+Both are mounted volumes like the coding-CLI logins, so a rebuild keeps them.
+BANNER

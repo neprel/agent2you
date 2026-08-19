@@ -1,0 +1,8 @@
+name: conversation-key
+version: "1.0.0"
+description: >-
+  Names each conversation on the wire, so acp2api can keep one ACP session per
+  Mattermost thread instead of starting a cold coding agent on every message.
+author: the source deployment
+middleware:
+  - llm_request

@@ -1,0 +1,11 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.venv/
+
+# A fleet workspace created inside this repo for testing. Real fleets live in
+# their own repositories (see `a2y init`).
+/tmp-fleet*/

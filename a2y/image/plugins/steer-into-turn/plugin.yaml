@@ -1,0 +1,9 @@
+name: steer-into-turn
+version: "1.0.0"
+description: >-
+  Make `busy_input_mode: steer` mean what it says. Hermes adds a steered message
+  to the conversation for its NEXT model call -- and here one model call IS the
+  whole coding-agent turn, so there is no next until everything is done. This
+  delivers the message to acp2api instead, which puts it into the running ACP
+  session. Requires acp2api >= 1.6.1 with `server.busy: queue`.
+author: the source deployment

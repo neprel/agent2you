@@ -1,0 +1,23 @@
+[project]
+name = "agent2you"
+version = "0.1.0"
+description = "Deploy a team of chat-resident AI agents from declarative manifests: Hermes + litellm + acp2api + subscription coding CLIs, one container per agent."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+dependencies = ["pyyaml>=6.0"]
+
+[project.scripts]
+a2y = "a2y.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["a2y"]
+
+[tool.setuptools.package-data]
+# The image build context is data: `a2y init` vendors it into each fleet
+# workspace, where it becomes the user's to edit.
+a2y = ["image/*", "image/**/*"]

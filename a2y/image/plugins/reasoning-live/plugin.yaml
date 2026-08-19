@@ -1,0 +1,9 @@
+name: reasoning-live
+version: "1.0.0"
+description: >-
+  Relay the reasoning channel to the live progress bubble while the turn is
+  still running. Hermes reads `reasoning_content` off the wire and fires
+  `agent.reasoning_callback` for every delta -- the CLI subscribes to it, the
+  gateway never does, so on a chat platform the whole channel is dropped on the
+  floor. This subscribes.
+author: the source deployment

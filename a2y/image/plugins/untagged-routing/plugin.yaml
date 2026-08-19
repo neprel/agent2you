@@ -1,0 +1,12 @@
+name: untagged-routing
+version: "2.0.0"
+description: >-
+  Decide which agent an UNTAGGED human message belongs to, so a conversation does
+  not need an @mention on every line. Whoever last answered in the thread owns it;
+  a group DM with one agent in it belongs to that agent; anything still unclaimed
+  belongs to the agent that owns the ROOM, from one fleet-wide map every agent is
+  given (AGENT_ROOM_OWNERS, with an optional `default`). Messages from other agents
+  still require an explicit mention -- that is what keeps two of them from
+  answering each other forever. The rules live in policy.py and know nothing about
+  Mattermost; __init__.py is the binding.
+author: the source deployment

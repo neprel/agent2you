@@ -1,0 +1,4 @@
+name: agent2you
+description: Distributable pack for deploying teams of chat-resident AI agents
+books:
+  - npm://@openhint/hintbook-software-engineer

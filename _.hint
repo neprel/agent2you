@@ -1,0 +1,98 @@
+# app agent2you
+
+A distributable pack for deploying teams of chat-resident AI agents. Two halves:
+the `a2y` python package (manifest loading, deterministic rendering, CLI) and
+`a2y/image/` (the agent container: dockerfile, entrypoint, supervisord, Hermes
+plugins), which `a2y init` vendors into each fleet workspace.
+
+The design is extracted from a production fleet in the operator's `the source deployment`
+repository (`the source fleet/`); that repo's `.hint` files carry the measurements
+behind most rules here. When this pack and the source deployment disagree, check whether the source deployment
+learned something new — or whether the pack generalised something the source deployment had
+hardcoded.
+
+# decision One agent is one container, and the stack inside is fixed {#one_container}
+
+Hermes + litellm + acp2api + the coding CLIs, one image, one instance per
+agent. Each layer exists because the others refuse to do its job: acp2api will
+not fail over, litellm will not run a tool loop, Hermes will not speak ACP, and
+the CLIs spend subscriptions through their own logins (no provider API key —
+that is the LEGAL basis, not an optimisation). Do not split the layers into
+shared services and do not "simplify" the two python virtualenvs into one
+(Hermes exact-pins its tree; litellm pins ranges over the same packages).
+
+# decision Configs are generated, not hand-written {#render}
+
+`a2y render` is deterministic: same manifests, same bytes. The deploy tree is
+committed and reviewed; the manifests are the only input. Escape hatches, in
+order: `hermes:`/`acp2api:` deep-merge keys in agent.yaml, then
+`agents/<name>/overrides/<file>` verbatim replacement. When an override
+repeats across fleets, teach the generator. Never make render read anything
+outside the workspace, the clock, or randomness — determinism is the feature.
+
+# decision Bridge network is the default; the shared namespace is opt-in {#network}
+
+In bridge mode every agent keeps its own loopback, so all agents use the same
+internal ports (10021/10022/10023/+8) and nothing is allocated. Port blocks,
+resolv.conf repair and the fail-closed interface assertion exist ONLY for
+`network.mode: container:<vpn>`. Do not reintroduce per-agent port bookkeeping
+into the default path.
+
+# decision The chat platform is a manifest option {#platform}
+
+Hermes owns the adapters; the pack decides which env vars flow and which
+plugins load. `mattermost` is the proven branch. The untagged-routing POLICY
+(`a2y/image/plugins/untagged-routing/policy.py`) deliberately names no chat
+product — a new platform adds a binding that answers the policy's two
+questions, never a second copy of the rules.
+
+# invariant example.env is complete {#env_parity}
+
+The generated `example.env` names every variable the compose file references,
+and `a2y doctor` enforces `.env` ⊇ `example.env`. A missing variable can make
+an UNRELATED service's compose fail to render; this invariant is what keeps
+that class of failure extinct.
+
+# bad Traps already paid for — do not reintroduce {#traps}
+
+* cline self-updates from `latest` at startup unless `CLINE_NO_AUTO_UPDATE=1`
+  is in the environment; the render always sets it. Removing it turns the
+  image pin into fiction inside a container full of OAuth logins.
+* `CLAUDE_CONFIG_DIR=/root/.claude` is load-bearing: without it Claude Code
+  keeps half its state outside every volume and a container replacement loses
+  the account while appearing to keep it.
+* codex's sandbox is set per TURN by the ACP session `mode:` in acp2api.yaml
+  (`agent-full-access`); `sandbox_mode` in config.toml governs only the human
+  CLI. Believing the config.toml fix cost the source deployment two rounds.
+* `bypassPermissions` is refused when Claude Code runs as root (these
+  containers do); `acceptEdits` is the correct mode and costs nothing on top
+  of `permission: allow`.
+* Never put a real provider key in `OPENAI_API_KEY` — codex may prefer it and
+  quietly bill the API instead of spending the subscription.
+* `warmup` in acp2api stays off: a forked session's MCP servers are dead
+  (measured 2026-08-14) — the agent can name its tools and cannot call one.
+* Anything that prints from bashrc must be guarded with `[ -t 1 ]`: the coding
+  agent sources it for every Bash call, and an unguarded banner lands in its
+  context on every command.
+* stdio MCP servers: `env:` REPLACES the child's environment (node falls off
+  PATH); pass URLs as flags, not env, when a package reads several aliases.
+* A monkeypatched Hermes method must present the wrapped signature — a
+  `**kwargs` wrapper advertises parameters the real method lacks and every
+  call dies in a caught-and-logged handler (trace-to-card, weeks, invisibly).
+
+# good Version discipline in the image {#pins}
+
+Every tool is an ARG pin; raw binaries are checksum-verified against the
+publisher's sums; npm installs use `--include=optional` AND the build asserts
+the Claude Agent SDK platform binary landed (a miss fails every request with a
+content-free `-32603`). Bumping `LITELLM_VERSION` requires checking
+`fastapi.dependencies.utils.get_flat_dependant` still exists or adjusting
+`FASTAPI_VERSION`.
+
+# build
+
+`uv run --with pyyaml python -m a2y.cli --help` runs the CLI from a checkout.
+Smoke test: `a2y init /tmp/f && cd /tmp/f && a2y render` then
+`docker compose -f deploy/docker-compose.yaml config -q` with a filled `.env`.
+There is no test suite yet; when one lands it must cover render determinism
+(two runs, identical bytes) and the manifest validation errors.

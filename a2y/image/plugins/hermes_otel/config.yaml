@@ -1,0 +1,62 @@
+# hermes-otel, configured for THIS deployment.
+#
+# The plugin's code is vendored by clone at a tag into /opt/agent/plugins/hermes_otel
+# (see ai/agent.dockerfile); this file is ours and is merged into that directory by
+# `COPY agent/plugins /opt/agent/plugins`. The entrypoint then copies the whole
+# directory into $HERMES_HOME/plugins on every start, which is where the plugin
+# looks for it.
+#
+# Without this file the plugin falls back to single-backend detection from
+# OTEL_PHOENIX_ENDPOINT, which works for traces and gets METRICS wrong -- see below.
+
+backends:
+  - type: phoenix
+    # No `endpoint:` on purpose. Left unset, the plugin reads OTEL_PHOENIX_ENDPOINT
+    # from the environment, which ai/docker-compose.yaml sets per agent. Naming the
+    # URL here as well would be a second place to change it.
+
+    # TRACES ONLY, and this is the whole reason the file exists.
+    #
+    # The plugin's default for an unknown-capability backend is to export metrics
+    # too, and it sends them to the SAME OTLP/HTTP endpoint as the spans. Phoenix
+    # serves traces at /v1/traces and nothing else, so every export cycle logged
+    #
+    #   ERROR opentelemetry.exporter.otlp.proto.http.metric_exporter:
+    #   Failed to export metrics batch code: 405, reason: Method Not Allowed
+    #
+    # once every 30 seconds, in every agent, forever. Nothing was lost -- Phoenix
+    # was never going to store them -- but a permanent ERROR in the log is how
+    # people learn to stop reading the log.
+    #
+    # The metrics that matter here are already in Prometheus, scraped rather than
+    # pushed. See monitor/_.hint#collected.
+    metrics: false
+    logs: false
+
+# One project per agent, from OTEL_PROJECT_NAME in the compose environment. It is
+# the project dropdown in Phoenix, and it is what makes "whose tokens" a question
+# with an answer.
+
+# Prompts and completions ARE captured. That is the point of running this at all --
+# a trace without the prompt says how long a turn took and not what it did -- and
+# it is why monitor-phoenix is published on no host interface. See
+# monitor/_.hint#off_the_lan.
+capture_previews: true
+
+# The conversation the model actually saw, on the llm.* span. The api.* spans carry
+# no message-level detail, so without this a trace shows the last user message and
+# not the context it was answered from -- which is exactly what one wants to read
+# when an answer looks wrong.
+capture_conversation_history: true
+conversation_history_max_chars: 20000
+
+# OFF. It would add the raw Mattermost sender id to every gateway span. The people
+# in this workspace are one operator and three agents, all of whom are already
+# identifiable from the project name and the channel, so it buys nothing and stores
+# an identifier.
+capture_sender_id: false
+
+# OFF. It attaches an OTel handler to the ROOT logger, which exports log records
+# from every library hermes-agent imports rather than from the plugin -- and there
+# is no log store in this cluster to receive them anyway.
+capture_logs: false

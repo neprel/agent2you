@@ -1,0 +1,7 @@
+name: mention-on-edit
+version: "1.0.0"
+description: >-
+  Wake the agent when a mention arrives by EDIT rather than by a new post.
+  Mattermost's adapter listens only for `posted`, so adding @agent to a message
+  after sending it -- or writing it inside a streamed answer -- reached nobody.
+author: the source deployment
