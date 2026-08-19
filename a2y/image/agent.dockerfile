@@ -85,7 +85,7 @@ ARG YARN_VERSION=4.18.0
 # against the fleet workspace cloned into /work. Building images and starting
 # containers stay OUTSIDE (no docker socket in here, ever); the supervisor
 # prepares, the operator or CI executes.
-ARG AGENT2YOU_VERSION=1.3.0
+ARG AGENT2YOU_VERSION=1.3.2
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
