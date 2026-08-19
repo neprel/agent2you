@@ -17,8 +17,12 @@ name: {name}
 
 image:
   # Built with `a2y build` from ./image (vendored by init -- edit it freely;
-  # pin bumps and extra tools belong there).
+  # pin bumps belong there). Extra tools go in as TOOLKITS: a directory
+  # `toolkits/<name>/` with toolkit.yaml (apt/npm/uv_tools/env/dockerfile) and
+  # a USAGE.md that lands in the SOUL.md of every agent carrying it. List them
+  # here for the whole fleet, or per agent as `toolkits: [...]`.
   tag: agent2you/{name}:0.1.0
+  # toolkits: [go]
 
 network:
   # bridge: the fleet gets its own docker network; every agent keeps its own

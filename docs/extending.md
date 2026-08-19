@@ -27,19 +27,50 @@ or `SOUL.md`. The file is still copied into `deploy/`, so review stays in one
 place. Use it for a shape the generator cannot express yet; when the need
 repeats, teach the generator instead.
 
+## Toolkits: a tool and its instructions, as one unit
+
+The primary way to give agents extra tools. A toolkit is a directory in the
+fleet workspace bundling the INSTALL recipe with the USAGE instructions —
+because a tool nobody was told how to use is a tool that gets misused:
+
+```
+toolkits/go/
+  toolkit.yaml     # apt: / npm: / uv_tools: / env: / dockerfile: (verbatim)
+  USAGE.md         # appended to the SOUL.md of every agent that carries it
+```
+
+```yaml
+# toolkits/go/toolkit.yaml — pin versions, keep the base image's posture
+apt: [golang-1.26]
+npm: ["some-linter@1.2.3"]
+uv_tools: ["some-tool==2.0"]
+env: {GOFLAGS: -mod=readonly}
+dockerfile: |
+  RUN curl -fsSL ... && sha256sum -c ...   # anything the sugar keys can't say
+```
+
+Attach it in the manifests:
+
+- `image.toolkits: [go]` in fleet.yaml — baked into the **fleet image**, every
+  agent gets it;
+- `toolkits: [go]` in an agent.yaml (or `a2y agent add ... --toolkits go`) —
+  that agent runs a **derived image** (`<tag>-<name>`), built automatically by
+  `a2y build` from the generated `deploy/build/agent-<name>.dockerfile`.
+
+Either way the toolkit's USAGE.md lands in the agent's rendered SOUL.md under
+`## Toolkit: <name>`, so install and instructions cannot drift apart. The
+default set in the base image (git, gh, tea, openspec, spec-kit, hint, …) is
+just the floor — a fleet that wants a leaner base edits the vendored
+dockerfile and re-adds what it needs as toolkits.
+
 ## The image (vendored, yours)
 
-`a2y init` copies `image/` into the fleet workspace. Edit it directly:
+`a2y init` copies `image/` into the fleet workspace. For a tool one fleet or
+one agent needs, prefer a toolkit (above); edit the image itself for pins and
+for changing the default set:
 
 - **bump a pin**: change the ARG. Version pins are the reason two agents built
   a month apart run the same software; keep them honest.
-- **add a tool for every agent**: add it to the appropriate install step. Keep
-  the posture — pinned versions, checksums for raw binaries, npm with
-  `--include=optional`.
-- **add a tool for one agent**: build a derived image
-  (`FROM agent2you/<fleet>:<tag>` + your additions), tag it, and point that
-  agent's compose at it via an override — or keep one image and gate the tool
-  by config, which is usually simpler.
 - A toolchain worth copying from another image: copy a self-contained prefix
   (like `/usr/local/go`), never a whole `/usr/local` over an existing one, and
   check for symlinks that point outside what you copied — a dangling one waits

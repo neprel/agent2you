@@ -431,6 +431,15 @@ def _agent_service(agent: Agent) -> dict:
         env["A2Y_SHARED_NAMESPACE"] = "1"
         env["AGENT_VPN_IFACE"] = str(fleet.network.get("iface") or "")
         env["A2Y_PEER_ADDR_TEMPLATE"] = "http://127.0.0.1:{a2a}/"
+    if agent.access.get("ssh") and fleet.git_hosts:
+        # Hosts beyond github.com to pre-seed into known_hosts (a gitea, a
+        # gitlab); the entrypoint keyscans each on start.
+        env["A2Y_GIT_HOSTS"] = ",".join(fleet.git_hosts)
+    if agent.hermes_env:
+        # Extra container variables crossed into Hermes' own .env -- the
+        # generic route for a platform or plugin variable the entrypoint's
+        # built-in whitelist does not know.
+        env["A2Y_HERMES_ENV_EXTRA"] = ",".join(agent.hermes_env)
     # Free-form passthrough, fleet-level then agent-level.
     for extra in (fleet.platform.get("env") or {}, agent.raw.get("env") or {}):
         for k, v in extra.items():
@@ -459,9 +468,12 @@ def _agent_service(agent: Agent) -> dict:
         volumes.append(f"{state}/ssh:/root/.ssh")
     volumes.append(f"{state}/workspace:/work")
 
+    # An agent with toolkits of its own runs a derived image, built by
+    # `a2y build` FROM the fleet image and tagged with the agent's name.
+    image = "${A2Y_IMAGE}" + (f"-{agent.name}" if agent.toolkits else "")
     service: dict = {
         "container_name": agent.container,
-        "image": "${A2Y_IMAGE}",
+        "image": image,
         "restart": "unless-stopped",
         # On SIGTERM the gateway finishes its turn; behind it a coding CLI may be
         # mid-edit. Killing at 10s loses work.
@@ -572,7 +584,68 @@ def _soul(agent: Agent) -> str:
     shared = agent.fleet.root / "SOUL-shared.md"
     if shared.is_file():
         soul += "\n" + shared.read_text().rstrip("\n") + "\n"
+    # Toolkit USAGE travels with the toolkit: an agent that carries a tool also
+    # carries the instructions for it, in the same prompt, without anyone
+    # remembering to say so. Fleet-image toolkits first, then the agent's own.
+    for name in [*agent.fleet.image_toolkits, *agent.toolkits]:
+        usage = agent.fleet.load_toolkit(name)["_usage"].strip()
+        if usage:
+            soul += f"\n## Toolkit: {name}\n\n{usage}\n"
     return soul
+
+
+# ---------------------------------------------------------------------------
+# toolkit build files
+# ---------------------------------------------------------------------------
+
+def _toolkit_snippet(spec: dict) -> str:
+    """Dockerfile lines for one toolkit. Sugar keys (apt/npm/uv_tools/env)
+    render into pinned install commands; `dockerfile:` is the verbatim escape
+    hatch for anything else. Keep the base image's posture: pin versions in the
+    lists (pkg=1.2 / pkg@1.2 / tool==1.2) -- an unpinned name installs whatever
+    today serves."""
+    lines = [f"# toolkit: {spec['_name']}"]
+    if spec.get("apt"):
+        pkgs = " ".join(str(p) for p in spec["apt"])
+        lines.append(
+            "RUN apt-get update && apt-get install -y --no-install-recommends "
+            f"{pkgs} && rm -rf /var/lib/apt/lists/*"
+        )
+    if spec.get("npm"):
+        pkgs = " ".join(f'"{p}"' for p in spec["npm"])
+        lines.append(f"RUN npm install -g --no-fund --no-audit {pkgs}")
+    if spec.get("uv_tools"):
+        for t in spec["uv_tools"]:
+            lines.append(f'RUN uv tool install --no-cache "{t}"')
+    for k, v in (spec.get("env") or {}).items():
+        lines.append(f"ENV {k}={v}")
+    if spec.get("dockerfile"):
+        lines.append(str(spec["dockerfile"]).rstrip("\n"))
+    return "\n".join(lines) + "\n"
+
+
+def render_build_files(fleet: Fleet) -> dict[str, str]:
+    """Derived dockerfiles under deploy/build/, built by `a2y build`:
+
+    fleet.dockerfile      FROM <tag>-base, when fleet.image.toolkits is set
+                          (the base then builds as <tag>-base and the fleet
+                          image takes the tag every plain agent runs)
+    agent-<name>.dockerfile  FROM <tag>, per agent with its own toolkits,
+                          tagged <tag>-<name>
+    """
+    out: dict[str, str] = {}
+    tag = fleet.image_tag
+    if fleet.image_toolkits:
+        body = GENERATED + f"FROM {tag}-base\n\n"
+        body += "\n".join(_toolkit_snippet(fleet.load_toolkit(t)) for t in fleet.image_toolkits)
+        out["build/fleet.dockerfile"] = body
+    for agent in fleet.agents:
+        if not agent.toolkits:
+            continue
+        body = GENERATED + f"FROM {tag}\n\n"
+        body += "\n".join(_toolkit_snippet(fleet.load_toolkit(t)) for t in agent.toolkits)
+        out[f"build/agent-{agent.name}.dockerfile"] = body
+    return out
 
 
 def render_fleet(fleet: Fleet, out: Path | None = None) -> list[str]:
@@ -605,6 +678,9 @@ def render_fleet(fleet: Fleet, out: Path | None = None) -> list[str]:
     if banks.is_dir():
         for f in sorted(banks.glob("*.json")):
             emit(f"banks/{f.name}", f.read_text())
+
+    for rel, content in render_build_files(fleet).items():
+        emit(rel, content)
 
     emit("docker-compose.yaml", render_compose(fleet))
     emit("example.env", render_example_env(fleet))

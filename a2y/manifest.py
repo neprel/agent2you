@@ -109,6 +109,15 @@ class Agent:
     def extra_mcp(self) -> list[dict]:
         return list(self.raw.get("mcp") or [])
 
+    @property
+    def toolkits(self) -> list[str]:
+        return [str(t) for t in (self.raw.get("toolkits") or [])]
+
+    @property
+    def hermes_env(self) -> list[str]:
+        """Extra container variables to cross into Hermes' own .env."""
+        return [str(v) for v in (self.raw.get("hermes_env") or [])]
+
     def ports(self) -> dict[str, int]:
         return self.fleet.ports_for(self)
 
@@ -200,6 +209,40 @@ class Fleet:
     def defaults(self) -> dict:
         return self.raw.get("defaults") or {}
 
+    @property
+    def image_toolkits(self) -> list[str]:
+        """Toolkits baked into the fleet image (every agent gets them)."""
+        return [str(t) for t in (self.image.get("toolkits") or [])]
+
+    @property
+    def git_hosts(self) -> list[str]:
+        """ssh hosts the entrypoint pre-seeds into known_hosts (github.com is
+        the default; a gitea or gitlab host goes here)."""
+        return [str(h) for h in ((self.raw.get("git") or {}).get("hosts") or [])]
+
+    # ---- toolkits --------------------------------------------------------
+
+    def toolkit_dir(self, name: str) -> Path:
+        return self.root / "toolkits" / name
+
+    def load_toolkit(self, name: str) -> dict:
+        """A toolkit is a directory bundling an INSTALL recipe with USAGE
+        instructions: `toolkits/<name>/toolkit.yaml` (apt/npm/uv_tools/env/
+        dockerfile keys) plus an optional USAGE.md appended to the SOUL.md of
+        every agent that carries it. Install and instructions travel together
+        because a tool nobody was told how to use is a tool that gets misused."""
+        d = self.toolkit_dir(name)
+        f = d / "toolkit.yaml"
+        if not f.is_file():
+            raise ManifestError(
+                f"toolkit {name!r} is referenced but toolkits/{name}/toolkit.yaml does not exist"
+            )
+        spec = _load_yaml(f)
+        usage = d / "USAGE.md"
+        spec["_usage"] = usage.read_text() if usage.is_file() else ""
+        spec["_name"] = name
+        return spec
+
     # ---- ports ----------------------------------------------------------
 
     def ports_for(self, agent: Agent) -> dict[str, int]:
@@ -240,9 +283,13 @@ class Fleet:
             raise ManifestError(f"{where}: memory.kind hindsight needs memory.url")
         if not self.agents:
             raise ManifestError(f"{self.root}: no agents/*/agent.yaml found")
+        for t in self.image_toolkits:
+            self.load_toolkit(t)  # raises with the toolkit's name when missing
         seen: dict[str, str] = {}
         blocks: dict[int, str] = {}
         for a in self.agents:
+            for t in a.toolkits:
+                self.load_toolkit(t)
             if a.name in seen:
                 raise ManifestError(f"duplicate agent name {a.name!r}")
             seen[a.name] = a.name

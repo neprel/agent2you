@@ -86,6 +86,8 @@ def cmd_agent_add(ns: argparse.Namespace) -> int:
     if ns.projects:
         memory = manifest.setdefault("memory", {})
         memory["projects"] = [s.strip() for s in ns.projects.split(",") if s.strip()]
+    if ns.toolkits:
+        manifest["toolkits"] = [s.strip() for s in ns.toolkits.split(",") if s.strip()]
     if ns.reply_mode or ns.no_require_mention:
         platform = manifest.setdefault("platform", {})
         if ns.reply_mode:
@@ -172,6 +174,7 @@ def register(sub: argparse._SubParsersAction) -> None:
     pa.add_argument("--ssh", action="store_true", help="mount an ssh key volume")
     pa.add_argument("--github-token", action="store_true", help="expects AGENT_<N>_GH_TOKEN")
     pa.add_argument("--projects", help="shared memory banks, comma-separated")
+    pa.add_argument("--toolkits", help="toolkits from ./toolkits/, comma-separated (derived image)")
     pa.add_argument("--reply-mode", choices=["thread", "channel"])
     pa.add_argument("--no-require-mention", action="store_true")
     pa.add_argument("--ports-base", help="port block base (shared-namespace fleets only)")

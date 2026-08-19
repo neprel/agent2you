@@ -35,6 +35,12 @@ open-ended-ask. One question per message works best in chat.
    split keeps the one with a shell honest.
 6. **Shared memory** — which project banks does it join? (`--projects a,b`;
    a bank is created on first write, its profile lives in `banks/*.json`.)
+6a. **Special tools** — does the work need anything beyond the base image
+   (a language toolchain, a CLI, a vendor SDK)? Each becomes a toolkit:
+   `toolkits/<name>/toolkit.yaml` (the pinned install) + `USAGE.md` (how to
+   use it — this text lands in the agent's SOUL.md), attached with
+   `--toolkits <name>`. Draft the USAGE.md the same way as the soul: show it,
+   get an ok.
 7. **Where it lives** — which channel is home, and does it own the room's
    untagged messages? (home channel goes to `.env`; room ownership is an edit
    to `A2Y_ROOM_OWNERS`.)

@@ -193,12 +193,15 @@ if [ -d /root/.ssh ]; then
         log "  $(cat /root/.ssh/id_git_ed25519.pub)"
     fi
 
-    # github.com's host keys are public and stable; keeping them out of the
-    # volume means a wiped volume still verifies rather than hanging on a prompt.
-    if ! grep -q '^github.com ' /root/.ssh/known_hosts 2>/dev/null; then
-        ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> /root/.ssh/known_hosts 2>/dev/null \
-            && log "  known_hosts: added github.com"
-    fi
+    # Forge host keys are public and stable; seeding them here means a wiped
+    # volume still verifies rather than hanging on a prompt. github.com is the
+    # default; A2Y_GIT_HOSTS (comma-separated) adds a gitea/gitlab of yours.
+    for _host in github.com ${A2Y_GIT_HOSTS//,/ }; do
+        if ! grep -q "^${_host} " /root/.ssh/known_hosts 2>/dev/null; then
+            ssh-keyscan -t rsa,ecdsa,ed25519 "${_host}" >> /root/.ssh/known_hosts 2>/dev/null \
+                && log "  known_hosts: added ${_host}"
+        fi
+    done
     chmod 600 /root/.ssh/known_hosts 2>/dev/null || true
 
     # Which key for which host: without this ssh offers the host-access key
@@ -273,6 +276,14 @@ _cross \
 for var in $(compgen -e | grep -E '^(TELEGRAM|SLACK|DISCORD)_' || true); do
     _cross "$var"
 done
+# And the fully generic route: A2Y_HERMES_ENV_EXTRA names container variables
+# (comma-separated) to cross over -- for a platform or plugin this whitelist
+# does not know, declared per agent as `hermes_env:` in its manifest.
+if [ -n "${A2Y_HERMES_ENV_EXTRA:-}" ]; then
+    for var in ${A2Y_HERMES_ENV_EXTRA//,/ }; do
+        _cross "$var"
+    done
+fi
 log "  $(wc -l < "${HERMES_HOME}/.env") variable(s)"
 
 log "Step 5: Starting acp2api :${ACP2API_PORT}, litellm :${LITELLM_PORT}, hermes gateway"

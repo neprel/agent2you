@@ -65,6 +65,12 @@ ARG GH_VERSION=2.97.0
 ARG TEA_VERSION=0.15.1
 ARG LITELLM_VERSION=1.96.0
 ARG HINDSIGHT_CLIENT_VERSION=0.9.0
+# Hermes' PDF / legacy-Office reader is a LAZY dependency ("tool.doc_extract"),
+# not an extra: without it baked in, the FIRST time an agent reads a
+# .pdf/.docx/.xlsx attachment Hermes pip-installs it MID-TURN, unpinned, into
+# the running container -- latency plus an unpinned install in a container full
+# of OAuth logins. Baked and pinned instead.
+ARG FIRECRAWL_ANYDOC_VERSION=0.1.6
 # litellm 1.96.0 imports a symbol FastAPI removed in 0.141 and does not cap the
 # dependency; installed AFTERWARDS on purpose (together it is ResolutionImpossible,
 # after the fact pip downgrades and merely warns). Raise only after checking
@@ -167,7 +173,15 @@ RUN curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/
         --hermes-home /root/.hermes \
     && rm -f /tmp/install.sh \
     && uv pip install --no-cache --python /opt/agent/hermes-agent/venv/bin/python \
-        "hindsight-client==${HINDSIGHT_CLIENT_VERSION}"
+        "hindsight-client==${HINDSIGHT_CLIENT_VERSION}" \
+        "firecrawl-anydoc==${FIRECRAWL_ANYDOC_VERSION}" \
+    # Refuse Hermes' own self-update. detect_install_method() reads
+    # <install-tree>/.install_method FIRST and honours it as authoritative; a
+    # `docker` stamp makes every update path decline. Without it, an agent (or
+    # the dashboard's update button) can replace pinned code in a running
+    # container -- the exact failure mode cline's self-update already
+    # demonstrated in this image's history.
+    && printf 'docker\n' > /opt/agent/hermes-agent/.install_method
 
 # The OTel plugin, and its python dependencies BY HAND: plugin.yaml cannot
 # declare them, and a plugin whose imports fail is logged once at startup and

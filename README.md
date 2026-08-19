@@ -76,7 +76,14 @@ observability (Phoenix traces, Prometheus token metrics), image tag, and
 
 `agents/<name>/agent.yaml` — the agent: description (its card, roster entry and
 the reason colleagues call it), brain chain and executors, access (ssh volume,
-GitHub token), memory banks, extra MCP servers.
+GitHub token), memory banks, extra MCP servers (`mcp:` — per agent, appended to
+the defaults the platform/memory/observability choices imply), and `toolkits:`.
+
+`toolkits/<name>/` — a tool and its instructions as one unit: `toolkit.yaml`
+(pinned apt/npm/uv_tools/env install, plus a verbatim `dockerfile:` escape
+hatch) and `USAGE.md`, which lands in the SOUL.md of every agent carrying the
+toolkit. Fleet-level toolkits bake into the fleet image; agent-level ones get a
+derived image built automatically by `a2y build`.
 
 `agents/<name>/SOUL.md` — the persona. `SOUL-shared.md` is appended to everyone.
 

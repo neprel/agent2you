@@ -65,6 +65,18 @@ bumping one means resolving the new tag's COMMIT sha (annotated tags point at a
 tag object — dereference it), never trusting the tag name. The release
 workflow gates on the test suite and on tag == pyproject version.
 
+# decision A toolkit bundles install with usage {#toolkits}
+
+`toolkits/<name>/` = `toolkit.yaml` (apt/npm/uv_tools/env + verbatim
+`dockerfile:` escape hatch) + `USAGE.md` appended to the SOUL.md of every agent
+carrying it. Fleet-level toolkits go into the fleet image; agent-level ones
+produce a derived image `<tag>-<agent>` from a GENERATED dockerfile in
+deploy/build/, built by `a2y build` in a chain (base -> fleet -> per-agent).
+The pairing is the point: a tool and the instructions for it must not be able
+to drift apart, and neither may live in a volume. Do not add tools to agents
+any other way (hand-edited compose images, exec-time installs) — an install at
+runtime is the ai-router mistake the one-container decision buried.
+
 # invariant example.env is complete {#env_parity}
 
 The generated `example.env` names every variable the compose file references,

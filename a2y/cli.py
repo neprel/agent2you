@@ -77,21 +77,39 @@ def cmd_render(_: argparse.Namespace) -> int:
 
 
 def cmd_build(ns: argparse.Namespace) -> int:
+    from .render import render_fleet
+
     fleet = _fleet()
     image_dir = fleet.root / "image"
     dockerfile = image_dir / "agent.dockerfile"
     if not dockerfile.is_file():
         print(f"{dockerfile} not found -- was this workspace created by `a2y init`?", file=sys.stderr)
         return 1
-    cmd = ["docker", "build", "-f", str(dockerfile), "-t", fleet.image_tag]
-    if ns.no_cache:
-        cmd.append("--no-cache")
-    cmd.append(str(image_dir))
-    print("+", " ".join(cmd))
-    rc = subprocess.call(cmd)
-    if rc == 0:
-        print(f"Built {fleet.image_tag}. Set A2Y_IMAGE={fleet.image_tag} in deploy/.env.")
-    return rc
+    render_fleet(fleet)  # the derived toolkit dockerfiles live in deploy/build/
+
+    tag = fleet.image_tag
+    build_dir = fleet.root / "deploy" / "build"
+    # The chain: base -> fleet toolkits (takes the tag agents run) -> per-agent.
+    plan: list[tuple[Path, str, Path]] = []
+    base_tag = f"{tag}-base" if fleet.image_toolkits else tag
+    plan.append((dockerfile, base_tag, image_dir))
+    if fleet.image_toolkits:
+        plan.append((build_dir / "fleet.dockerfile", tag, build_dir))
+    for a in fleet.agents:
+        if a.toolkits:
+            plan.append((build_dir / f"agent-{a.name}.dockerfile", f"{tag}-{a.name}", build_dir))
+
+    for df, t, ctx in plan:
+        cmd = ["docker", "build", "-f", str(df), "-t", t]
+        if ns.no_cache:
+            cmd.append("--no-cache")
+        cmd.append(str(ctx))
+        print("+", " ".join(cmd))
+        rc = subprocess.call(cmd)
+        if rc != 0:
+            return rc
+    print(f"Built {', '.join(t for _, t, _ in plan)}. A2Y_IMAGE={tag} in deploy/.env.")
+    return 0
 
 
 def cmd_up(ns: argparse.Namespace) -> int:
