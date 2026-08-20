@@ -38,6 +38,8 @@ FROM ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e8
 
 # Pinned in the image, not in .env: versions are not secrets, and a tracked pin
 # is the only reason two agents built a month apart run the same software.
+# Latest checks used by `a2y outdated`: npm registry for npm tools, PyPI for
+# Python tools, GitHub Releases for gh/hermes-otel, Gitea Releases for tea.
 ARG CLAUDE_CODE_VERSION=2.1.226
 ARG CODEX_VERSION=0.147.0
 ARG OPENCODE_VERSION=1.18.16
@@ -58,8 +60,10 @@ ARG PHOENIX_MCP_VERSION=4.3.3
 ARG HERMES_OTEL_VERSION=0.11.0
 # The hint CLI + hintbook: repositories that keep durable knowledge in .hint
 # files expect agents to run `hint <path>` before touching anything.
-ARG HINT_VERSION=1.2.0
-ARG HINTBOOK_VERSION=1.1.1
+ARG HINT_VERSION=1.4.0
+ARG HINTBOOK_VERSION=1.2.0
+# Git commit, checked against the upstream main ref by `a2y outdated`.
+ARG HERMES_COMMIT=f43eabee5f36e11448086ee8ee17c499958e81bf
 # Forge CLIs, pinned tarballs with verified checksums.
 ARG GH_VERSION=2.97.0
 ARG TEA_VERSION=0.15.1
@@ -85,7 +89,7 @@ ARG YARN_VERSION=4.18.0
 # against the fleet workspace cloned into /work. Building images and starting
 # containers stay OUTSIDE (no docker socket in here, ever); the supervisor
 # prepares, the operator or CI executes.
-ARG AGENT2YOU_VERSION=1.3.2
+ARG AGENT2YOU_VERSION=1.4.0
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -172,11 +176,10 @@ RUN set -eu; \
 # pip-from-git means maintaining someone else's install logic).
 #   --dir          code OUTSIDE /root/.hermes, which is a volume at runtime
 #   --hermes-home  state where the volume will be
-# This tracks main; the installer takes `--commit <sha>` if reproducibility ever
-# matters more than being current.
 RUN curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh -o /tmp/install.sh \
     && bash /tmp/install.sh \
         --non-interactive --skip-setup --skip-browser \
+        --commit "${HERMES_COMMIT}" \
         --dir /opt/agent/hermes-agent \
         --hermes-home /root/.hermes \
     && rm -f /tmp/install.sh \
@@ -221,13 +224,15 @@ COPY fleet-roster.py /opt/agent/bin/fleet-roster.py
 # Pushes each bank's mission into Hindsight, which the Hermes plugin reads from
 # config and never applies itself.
 COPY apply-memory-profile.py /opt/agent/bin/apply-memory-profile.py
+COPY a2y-health a2y-memory a2y-duties /opt/agent/bin/
 # Per-program sections, assembled by the entrypoint: hermes and fleet-roster
 # always; acp2api and litellm only when their config was rendered for this
 # agent. An agent pointed straight at an OpenAI endpoint runs neither.
 COPY supervisord.d /opt/agent/supervisord.d
 COPY bashrc /root/.bashrc
 RUN chmod +x /opt/agent/bin/entrypoint.sh /opt/agent/bin/fleet-roster.py \
-        /opt/agent/bin/apply-memory-profile.py \
+        /opt/agent/bin/apply-memory-profile.py /opt/agent/bin/a2y-health \
+        /opt/agent/bin/a2y-memory /opt/agent/bin/a2y-duties \
     && printf '[ -f /root/.bashrc ] && . /root/.bashrc\n' > /root/.bash_profile
 
 # Where the agent works. A volume in every deployment; present in the image so a

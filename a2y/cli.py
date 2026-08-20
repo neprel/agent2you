@@ -19,6 +19,9 @@ fleet.yaml).
 from __future__ import annotations
 
 import argparse
+import os
+import platform
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -39,6 +42,19 @@ def _compose(fleet: Fleet, *args: str) -> int:
         cmd += ["--env-file", str(env_file)]
     cmd += list(args)
     return subprocess.call(cmd)
+
+
+def _daemon_guard(allow: bool = False) -> None:
+    host = os.environ.get("DOCKER_HOST", "")
+    remote = bool(host and not host.startswith(("unix://", "npipe://")))
+    if not remote and shutil.which("docker"):
+        shown = subprocess.run(["docker", "context", "show"], capture_output=True, text=True)
+        remote = shown.returncode == 0 and shown.stdout.strip() not in {"", "default", "desktop-linux"}
+    if remote and not allow:
+        raise ManifestError(
+            "remote Docker daemon refused: compose bind mounts resolve on the daemon host; "
+            "run a2y on that host or pass --i-know-my-mounts"
+        )
 
 
 def cmd_bootstrap(_: argparse.Namespace) -> int:
@@ -90,6 +106,7 @@ def cmd_render(_: argparse.Namespace) -> int:
 
 
 def cmd_build(ns: argparse.Namespace) -> int:
+    _daemon_guard(ns.i_know_my_mounts)
     from .render import render_fleet
 
     fleet = _fleet()
@@ -112,15 +129,33 @@ def cmd_build(ns: argparse.Namespace) -> int:
         if a.toolkits:
             plan.append((build_dir / f"agent-{a.name}.dockerfile", f"{tag}-{a.name}", build_dir))
 
-    for df, t, ctx in plan:
+    def build_one(item) -> int:
+        df, t, ctx = item
         cmd = ["docker", "build", "-f", str(df), "-t", t]
         if ns.no_cache:
             cmd.append("--no-cache")
         cmd.append(str(ctx))
         print("+", " ".join(cmd))
-        rc = subprocess.call(cmd)
+        return subprocess.call(cmd)
+
+    barrier = 2 if fleet.image_toolkits else 1
+    for item in plan[:barrier]:
+        rc = build_one(item)
         if rc != 0:
             return rc
+    tail = plan[barrier:]
+    if tail and ns.parallel > 1:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=ns.parallel) as pool:
+            results = list(pool.map(build_one, tail))
+        if any(results):
+            return next(rc for rc in results if rc)
+    else:
+        for item in tail:
+            rc = build_one(item)
+            if rc:
+                return rc
     print(f"Built {', '.join(t for _, t, _ in plan)}. A2Y_IMAGE={tag} in deploy/.env.")
     return 0
 
@@ -129,6 +164,9 @@ def cmd_up(ns: argparse.Namespace) -> int:
     from .render import ensure_volumes, render_fleet
 
     fleet = _fleet()
+    _daemon_guard(ns.i_know_my_mounts)
+    if platform.system() == "Darwin" and fleet.shared_namespace:
+        raise ManifestError("VPN/shared-network-namespace fleets are unsupported on Docker Desktop macOS")
     render_fleet(fleet)
     for d in ensure_volumes(fleet):
         print(f"  created {d.relative_to(fleet.root)}")
@@ -138,14 +176,15 @@ def cmd_up(ns: argparse.Namespace) -> int:
 
 def cmd_down(ns: argparse.Namespace) -> int:
     fleet = _fleet()
+    _daemon_guard(ns.i_know_my_mounts)
     services = [f"agent-{n}" for n in ns.agents] if ns.agents else []
     return _compose(fleet, "stop", *services)
 
 
-def cmd_doctor(_: argparse.Namespace) -> int:
-    from .doctor import run_doctor
+def cmd_doctor(ns: argparse.Namespace) -> int:
+    from .doctor import DoctorOptions, run_doctor
 
-    return run_doctor(_fleet())
+    return run_doctor(_fleet(), DoctorOptions(offline=ns.offline, probe_brains=ns.probe_brains))
 
 
 AUTH_TEXT = """\
@@ -183,9 +222,7 @@ def cmd_auth(ns: argparse.Namespace) -> int:
         print(f"no agent named {ns.agent!r}", file=sys.stderr)
         return 1
     for a in agents:
-        steps = "".join(
-            AUTH_STEPS.get(a.executors[ex].get("kind") or ex, "") for ex in a.chain
-        )
+        steps = "".join(AUTH_STEPS.get(a.executors[ex].get("kind") or ex, "") for ex in a.chain)
         print(AUTH_TEXT.format(agent=a.name, steps=steps))
     return 0
 
@@ -227,24 +264,176 @@ Membership POSTs are no-ops when already present, so the sequence is safe to
 re-run after a partial failure.
 """
 
+PROVISION_TELEGRAM = """\
+=== {agent}: Telegram bot ===
+
+In @BotFather create one bot for this agent. Put its token in deploy/.env as
+{prefix}_TELEGRAM_BOT_TOKEN and put the operator's numeric Telegram user id in
+A2Y_TELEGRAM_ALLOWED_USERS. For group routing disable Group Privacy Mode; for
+agent-to-agent messages enable Bot-to-Bot Communication Mode. Add every fleet
+bot to the group and verify a real two-bot @mention before relying on routing.
+"""
+
+PROVISION_SLACK = """\
+=== {agent}: Slack app (Socket Mode) ===
+
+Create one Slack app per agent. Run `hermes slack manifest --agent-view --write`
+inside a temporary Hermes environment and paste the generated manifest at
+api.slack.com/apps. Enable Socket Mode, install the app, then set:
+  {prefix}_SLACK_BOT_TOKEN=xoxb-...
+  {prefix}_SLACK_APP_TOKEN=xapp-...   # connections:write
+  {prefix}_SLACK_HOME_CHANNEL=C...
+Add immutable member ids to A2Y_SLACK_ALLOWED_USERS. Invite every fleet bot to
+the shared channels. Missing message.channels/message.groups/message.mpim events
+is a silent no-delivery failure; reinstall after changing scopes.
+"""
+
+PROVISION_DISCORD = """\
+=== {agent}: Discord bot application ===
+
+Create one application/bot in the Discord Developer Portal. Enable Server
+Members Intent and Message Content Intent in the portal, invite it with bot and
+applications.commands scopes, then set:
+  {prefix}_DISCORD_BOT_TOKEN=...
+  {prefix}_DISCORD_HOME_CHANNEL=...
+Add immutable user ids to A2Y_DISCORD_ALLOWED_USERS. The rendered gateway accepts
+other bots only on explicit mentions; verify a real human turn and two-bot turn.
+"""
+
+PROVISION_TEAMS = """\
+=== Microsoft Teams enterprise front door ({agent}) ===
+
+Teams uses a public HTTPS Bot Framework webhook; there is no Socket-Mode/NAT
+alternative. Point the Azure Bot messaging endpoint at:
+  {endpoint}
+
+1. Register a single-tenant Entra application and create a client secret.
+2. Create an Azure Bot resource using that application id and enable Teams.
+3. Replace placeholders in platforms/teams/manifest.json, add icons, zip the
+   manifest, and upload it in Teams Admin Center (admin consent may be required).
+4. Set A2Y_TEAMS_CLIENT_ID, A2Y_TEAMS_CLIENT_SECRET, A2Y_TEAMS_TENANT_ID,
+   A2Y_TEAMS_ALLOWED_USERS (AAD object ids), A2Y_TEAMS_HOME_CHANNEL, and expose
+   A2Y_TEAMS_PORT through the HTTPS reverse proxy/tunnel.
+
+This is a human-to-fleet front door, not an agent office: Teams bots do not
+receive other bots' messages. The default gateway agent routes internally.
+"""
+
 
 def cmd_provision(ns: argparse.Namespace) -> int:
     fleet = _fleet()
+    if fleet.platform_kind == "telegram":
+        agents = [a for a in fleet.agents if not ns.agent or a.name == ns.agent]
+        for a in agents:
+            print(PROVISION_TELEGRAM.format(agent=a.name, prefix=a.env_prefix))
+        return 0
+    if fleet.platform_kind in {"slack", "discord"}:
+        agents = [a for a in fleet.agents if not ns.agent or a.name == ns.agent]
+        template = PROVISION_SLACK if fleet.platform_kind == "slack" else PROVISION_DISCORD
+        for a in agents:
+            print(template.format(agent=a.name, prefix=a.env_prefix))
+        return 0
+    if fleet.platform_kind == "teams":
+        gateway = str(fleet.platform.get("gateway_agent") or fleet.agents[0].name)
+        if ns.agent and ns.agent != gateway:
+            raise ManifestError(f"Teams has one gateway agent {gateway!r}; provision that agent")
+        print(PROVISION_TEAMS.format(agent=gateway, endpoint=fleet.platform["public_endpoint"]))
+        return 0
     if fleet.platform_kind != "mattermost":
-        print(f"platform.kind is {fleet.platform_kind!r}; provisioning docs cover mattermost. "
-              "For other Hermes platforms create the bot/account per that platform's docs and "
-              "pass its variables via platform.env.")
+        print(
+            f"platform.kind is {fleet.platform_kind!r}; provisioning docs cover mattermost. "
+            "For other Hermes platforms create the bot/account per that platform's docs and "
+            "pass its variables via platform.env."
+        )
         return 0
     agents = [a for a in fleet.agents if not ns.agent or a.name == ns.agent]
     for a in agents:
-        print(PROVISION_MM.format(agent=a.name, team=fleet.platform.get("team", "<team>"),
-                                  prefix=a.env_prefix))
+        print(
+            PROVISION_MM.format(agent=a.name, team=fleet.platform.get("team", "<team>"), prefix=a.env_prefix)
+        )
+    return 0
+
+
+def cmd_backup_cli(ns: argparse.Namespace) -> int:
+    from .backup import cmd_backup
+
+    return cmd_backup(ns, _fleet())
+
+
+def cmd_restore_cli(ns: argparse.Namespace) -> int:
+    from .backup import cmd_restore
+
+    return cmd_restore(ns, _fleet())
+
+
+def cmd_knowledge_cli(ns: argparse.Namespace) -> int:
+    from .knowledge import cmd_knowledge
+
+    return cmd_knowledge(ns, _fleet())
+
+
+def cmd_drill_cli(ns: argparse.Namespace) -> int:
+    from .drill import cmd_drill
+
+    return cmd_drill(ns, _fleet())
+
+
+def cmd_rotate_cli(ns: argparse.Namespace) -> int:
+    from .rotate import cmd_rotate
+
+    return cmd_rotate(ns, _fleet())
+
+
+def cmd_outdated_cli(ns: argparse.Namespace) -> int:
+    from .outdated import cmd_outdated
+
+    return cmd_outdated(ns, _fleet())
+
+
+def cmd_duty_templates(_: argparse.Namespace) -> int:
+    from importlib import resources
+
+    sys.stdout.write((resources.files("a2y") / "duty-templates.yaml").read_text())
+    return 0
+
+
+def cmd_rebuild(ns: argparse.Namespace) -> int:
+    """Snapshot, rebuild, recreate, then run reusable offline identity checks."""
+    from .backup import create_backup
+    from .doctor import DoctorOptions, run_doctor
+
+    fleet = _fleet()
+    _daemon_guard(ns.i_know_my_mounts)
+    names = [a.name for a in fleet.agents] if ns.all else [ns.agent]
+    known = {a.name for a in fleet.agents}
+    if any(name not in known for name in names):
+        raise ManifestError("unknown agent in rebuild request")
+    for name in names:
+        print(f"=== rebuilding {name} ===")
+        _compose(fleet, "stop", f"agent-{name}")
+        if not ns.no_backup:
+            archive = create_backup(fleet, name, fleet.root / "backup")
+            print(f"  snapshot {archive}")
+        build_ns = argparse.Namespace(no_cache=ns.no_cache, parallel=1, i_know_my_mounts=ns.i_know_my_mounts)
+        if cmd_build(build_ns):
+            return 1
+        if _compose(fleet, "up", "-d", "--force-recreate", f"agent-{name}"):
+            return 1
+        rc = run_doctor(fleet, DoctorOptions(offline=True))
+        if rc:
+            print(f"rebuild verification failed at {name}; rolling rebuild stopped", file=sys.stderr)
+            return rc
+        print(
+            "  identity files and offline continuity checks passed; run online doctor "
+            "for a real platform/brain probe"
+        )
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="a2y", description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        prog="a2y", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--version", action="version", version=f"a2y {__version__}")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -258,6 +447,7 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(fn=cmd_init)
 
     from .agents_cmd import register as register_agent_cmd
+
     register_agent_cmd(sub)
 
     p = sub.add_parser("render", help="manifests -> deploy/")
@@ -265,18 +455,93 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("build", help="build the agent image")
     p.add_argument("--no-cache", action="store_true")
+    p.add_argument("--parallel", type=int, default=1)
+    p.add_argument("--i-know-my-mounts", action="store_true")
     p.set_defaults(fn=cmd_build)
 
     p = sub.add_parser("up", help="ensure volumes, docker compose up -d")
     p.add_argument("agents", nargs="*")
+    p.add_argument("--i-know-my-mounts", action="store_true")
     p.set_defaults(fn=cmd_up)
 
     p = sub.add_parser("down", help="docker compose stop")
     p.add_argument("agents", nargs="*")
+    p.add_argument("--i-know-my-mounts", action="store_true")
     p.set_defaults(fn=cmd_down)
 
     p = sub.add_parser("doctor", help="check the deployment end to end")
+    p.add_argument("--offline", action="store_true")
+    p.add_argument("--probe-brains", action="store_true")
     p.set_defaults(fn=cmd_doctor)
+
+    p = sub.add_parser("upgrade", help="three-way update the pack-owned image tree")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--force", action="store_true")
+    from .upgrade import cmd_upgrade
+
+    p.set_defaults(fn=cmd_upgrade)
+
+    p = sub.add_parser("backup", help="archive credential-bearing agent state")
+    p.add_argument("agents", nargs="*")
+    p.add_argument("--out")
+    p.add_argument("--cold", action="store_true")
+    p.add_argument("--include-work", action="store_true")
+    p.set_defaults(fn=cmd_backup_cli)
+
+    p = sub.add_parser("restore", help="restore one agent state archive")
+    p.add_argument("archive")
+    p.add_argument("--agent")
+    p.add_argument("--force", action="store_true")
+    p.set_defaults(fn=cmd_restore_cli)
+
+    p = sub.add_parser("rebuild", help="snapshot, rebuild, recreate and verify an agent")
+    p.add_argument("agent", nargs="?")
+    p.add_argument("--all", action="store_true")
+    p.add_argument("--no-backup", action="store_true")
+    p.add_argument("--no-cache", action="store_true")
+    p.add_argument("--i-know-my-mounts", action="store_true")
+    p.set_defaults(fn=cmd_rebuild)
+
+    p = sub.add_parser("knowledge", help="curate local HINT memory")
+    ksub = p.add_subparsers(dest="knowledge_cmd", required=True)
+    remember_p = ksub.add_parser("remember")
+    remember_p.add_argument("agent")
+    remember_p.add_argument("--topic", required=True)
+    remember_p.add_argument("--text", required=True)
+    remember_p.set_defaults(fn=cmd_knowledge_cli)
+    retract_p = ksub.add_parser("retract")
+    retract_p.add_argument("agent")
+    retract_p.add_argument("--topic", required=True)
+    retract_p.add_argument("--superseded-by")
+    retract_p.set_defaults(fn=cmd_knowledge_cli)
+
+    p = sub.add_parser("duties", help="inspect declarative recurring-duty helpers")
+    dsub = p.add_subparsers(dest="duties_cmd", required=True)
+    templates_p = dsub.add_parser("templates", help="print cost, quota and gardener duty templates")
+    templates_p.set_defaults(fn=cmd_duty_templates)
+
+    p = sub.add_parser("drill", help="run deterministic behavior probes through the live chat platform")
+    p.add_argument("agent")
+    p.add_argument("--max", type=int, default=10, help="maximum real turns to spend (default: 10)")
+    p.set_defaults(fn=cmd_drill_cli)
+
+    p = sub.add_parser("rotate", help="rotate secrets; external classes stop at an explicit human step")
+    p.add_argument(
+        "rotation_class",
+        nargs="?",
+        choices=["litellm-keys", "platform-token", "github-token", "ssh-key"],
+    )
+    p.add_argument("agents", nargs="*")
+    p.add_argument("--all-internal", action="store_true")
+    p.add_argument("--no-recreate", action="store_true", help=argparse.SUPPRESS)
+    p.set_defaults(fn=cmd_rotate_cli)
+
+    p = sub.add_parser(
+        "outdated",
+        help="NETWORK: compare pack/image pins with PyPI and npm; never changes files",
+    )
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_outdated_cli)
 
     p = sub.add_parser("auth", help="print brain sign-in instructions")
     p.add_argument("agent", nargs="?")

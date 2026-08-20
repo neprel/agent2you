@@ -89,7 +89,8 @@ except ImportError:  # pragma: no cover
     # '__dict__'` -- an error that names neither this file nor dataclasses.
     sys.modules[_NAME] = _policy
     _spec.loader.exec_module(_policy)
-    CHANNEL, DEFAULT_ROOM, DIRECT, GROUP = _policy.CHANNEL, _policy.DEFAULT_ROOM, _policy.DIRECT, _policy.GROUP
+    CHANNEL, DEFAULT_ROOM = _policy.CHANNEL, _policy.DEFAULT_ROOM
+    DIRECT, GROUP = _policy.DIRECT, _policy.GROUP
     Identity, Message, Policy = _policy.Identity, _policy.Message, _policy.Policy
     parse_room_owners = _policy.parse_room_owners
 

@@ -35,7 +35,7 @@ because a tool nobody was told how to use is a tool that gets misused:
 
 ```
 toolkits/go/
-  toolkit.yaml     # apt: / npm: / uv_tools: / env: / dockerfile: (verbatim)
+  toolkit.yaml     # apt/npm/uv_tools/env/mcp/dockerfile
   USAGE.md         # appended to the SOUL.md of every agent that carries it
 ```
 
@@ -48,6 +48,25 @@ env: {GOFLAGS: -mod=readonly}
 dockerfile: |
   RUN curl -fsSL ... && sha256sum -c ...   # anything the sugar keys can't say
 ```
+
+An MCP toolkit puts its installation, wiring and instructions together. Toolkit
+servers load before agent-level `mcp:` entries; an agent entry with the same
+name replaces the toolkit entry. Only `${VAR}` references are copied into
+`example.env`.
+
+```yaml
+npm: ["@example/redmine-mcp@2.1.0"]
+mcp:
+  - name: redmine
+    command: redmine-mcp
+    args: ["--url", "${REDMINE_URL}"]
+```
+
+For explicit host device access use `host_access: {gpus: all, devices: [...]}`.
+This widens the impact of a compromised agent and requires a compatible Compose
+and, for NVIDIA, nvidia-container-toolkit. `privileged` is deliberately refused.
+A tool of the work belongs in a toolkit; a view of a remote host belongs behind
+`access.ssh`, not a host filesystem mount.
 
 Attach it in the manifests:
 
@@ -104,6 +123,19 @@ plain turn, a tool call through MCP, streaming, continuity, and whether it
 sends `usage_update` (without it `maxContextFill` cannot protect its sessions).
 An OpenAI-compatible endpoint (local vLLM, a paid API) is `kind: openai` with
 `base_url` + `api_key_env` and joins the same litellm chain.
+
+`kind: api` is a native LiteLLM provider model such as
+`anthropic/claude-sonnet-4-5` or `openai/gpt-5.2`, with `api_key_env`. It is a
+chat-grade continuity path without the coding harness's tools.
+
+## Upgrading the vendored image
+
+Everything under `image/` is pack-owned. `a2y upgrade --dry-run` compares the
+installed pack, the hash recorded at the previous init/upgrade, and the working
+copy. Unmodified files update automatically; local edits produce a unified diff
+and remain untouched unless `--force`. `fleet.yaml`, `agents/`, `toolkits/`,
+`SOUL-shared.md`, `banks/` are user-owned. `deploy/` is generated and pruned by
+render, never upgraded.
 
 ## Recording what you learn
 

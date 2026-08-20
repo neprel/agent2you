@@ -1,0 +1,9 @@
+description: Microsoft 365 calendar tools over Graph device-code auth
+npm: ["@softeria/ms-365-mcp-server@0.145.1"]
+mcp:
+  - name: calendar-exchange
+    command: ms-365-mcp-server
+    args: [--org-mode, --preset, calendar]
+    env:
+      PATH: /usr/local/bin:/usr/bin:/bin
+      XDG_CONFIG_HOME: /root/.hermes/m365-config

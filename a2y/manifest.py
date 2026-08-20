@@ -21,11 +21,11 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 import yaml
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+CRON_RE = re.compile(r"^[\d*/?,\-]+(?:\s+[\d*/?,\-]+){4}$")
 
 # Internal ports inside one agent container. In the default bridge network every
 # container has its own loopback, so every agent uses the same numbers and there
@@ -33,9 +33,9 @@ NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 # all agents share one loopback and each needs its own block -- see ports_for().
 PORTS_DEFAULT = {"acp2api": 10021, "litellm": 10022, "a2a": 10023, "metrics": 10029}
 
-KNOWN_EXECUTOR_KINDS = {"claude", "codex", "opencode", "cline", "custom", "openai"}
-KNOWN_PLATFORMS = {"mattermost", "telegram", "slack", "discord", "none"}
-KNOWN_MEMORY = {"hindsight", "none"}
+KNOWN_EXECUTOR_KINDS = {"claude", "codex", "opencode", "cline", "custom", "openai", "api"}
+KNOWN_PLATFORMS = {"mattermost", "telegram", "slack", "discord", "teams", "none"}
+KNOWN_MEMORY = {"hindsight", "local", "none"}
 
 
 class ManifestError(Exception):
@@ -106,8 +106,22 @@ class Agent:
         return self.raw.get("platform") or {}
 
     @property
+    def channels(self) -> dict:
+        return self.raw.get("channels") or {}
+
+    @property
+    def duties(self) -> list[dict]:
+        return list(self.raw.get("duties") or [])
+
+    @property
     def extra_mcp(self) -> list[dict]:
-        return list(self.raw.get("mcp") or [])
+        merged: dict[str, dict] = {}
+        for toolkit in [*self.fleet.image_toolkits, *self.toolkits]:
+            for server in self.fleet.load_toolkit(toolkit).get("mcp") or []:
+                merged[str(server.get("name") or "")] = dict(server)
+        for server in self.raw.get("mcp") or []:
+            merged[str(server.get("name") or "")] = dict(server)
+        return list(merged.values())
 
     @property
     def toolkits(self) -> list[str]:
@@ -126,10 +140,10 @@ class Agent:
         return self.executors[name].get("kind") or name
 
     def acp_chain(self) -> list[str]:
-        return [n for n in self.chain if self._kind(n) != "openai"]
+        return [n for n in self.chain if self._kind(n) not in {"openai", "api"}]
 
     def openai_chain(self) -> list[str]:
-        return [n for n in self.chain if self._kind(n) == "openai"]
+        return [n for n in self.chain if self._kind(n) in {"openai", "api"}]
 
     @property
     def acp2api_enabled(self) -> bool:
@@ -153,7 +167,7 @@ class Agent:
             return True
         if mode == "off":
             return False
-        return len(self.chain) > 1
+        return len(self.chain) > 1 or any(self._kind(name) == "api" for name in self.chain)
 
     @property
     def hermes_env(self) -> list[str]:
@@ -202,6 +216,65 @@ class Agent:
                         "inside the container that variable carries the litellm master key so "
                         "no real provider key can be billed by accident; pick a distinct name"
                     )
+            if kind == "api":
+                if not spec.get("model") or not spec.get("api_key_env"):
+                    raise ManifestError(
+                        f"{where}: executor {name!r} is kind api and needs `model` and `api_key_env`"
+                    )
+                if spec.get("api_key_env") == "OPENAI_API_KEY":
+                    raise ManifestError(f"{where}: executor {name!r}: api_key_env must not be OPENAI_API_KEY")
+        for server in self.extra_mcp:
+            if not server.get("name"):
+                raise ManifestError(f"{where}: every mcp server needs a name")
+            if bool(server.get("command")) == bool(server.get("url")):
+                raise ManifestError(
+                    f"{where}: mcp server {server.get('name')!r} needs exactly one of command or url"
+                )
+        host = self.raw.get("host_access") or {}
+        if "privileged" in host or self.raw.get("privileged"):
+            raise ManifestError(f"{where}: privileged containers are prohibited; use explicit gpus/devices")
+        if self.fleet.platform_kind != "mattermost" and any(
+            key in self.platform for key in ("reply_mode", "require_mention")
+        ):
+            raise ManifestError(f"{where}: reply_mode/require_mention are only implemented for mattermost")
+        if self.raw.get("role") == "apprentice" and not self.raw.get("owner"):
+            raise ManifestError(f"{where}: role apprentice requires owner (an immutable platform user id)")
+        for briefing in self.memory.get("briefings") or []:
+            if not isinstance(briefing, dict) or not briefing.get("date") or not briefing.get("text"):
+                raise ManifestError(f"{where}: each memory.briefings entry needs date and text")
+        email = self.channels.get("email")
+        if email:
+            required = {"address", "password_env", "imap_host", "smtp_host", "allowed_users"}
+            missing = sorted(required - set(email))
+            if missing:
+                raise ManifestError(f"{where}: channels.email is missing {', '.join(missing)}")
+            if not str(email.get("password_env", "")).isupper():
+                raise ManifestError(
+                    f"{where}: channels.email.password_env must name an uppercase env variable"
+                )
+            if not str(email.get("allowed_users") or "").strip():
+                raise ManifestError(
+                    f"{where}: channels.email.allowed_users must be non-empty (email fails closed)"
+                )
+        duty_names: set[str] = set()
+        for duty in self.duties:
+            if not isinstance(duty, dict):
+                raise ManifestError(f"{where}: every duty must be a mapping")
+            name = str(duty.get("name") or "")
+            if not NAME_RE.match(name):
+                raise ManifestError(f"{where}: duty name {name!r} must be lowercase [a-z0-9-]")
+            if name in duty_names:
+                raise ManifestError(f"{where}: duplicate duty name {name!r}")
+            duty_names.add(name)
+            schedule = str(duty.get("schedule") or "")
+            if not CRON_RE.fullmatch(schedule):
+                raise ManifestError(
+                    f"{where}: duty {name!r} schedule must be a numeric five-field cron expression (UTC)"
+                )
+            if not str(duty.get("channel") or "").strip():
+                raise ManifestError(f"{where}: duty {name!r} needs a non-empty channel")
+            if not str(duty.get("instruction") or "").strip():
+                raise ManifestError(f"{where}: duty {name!r} needs an instruction")
         mode = self.litellm_mode
         if mode not in ("auto", "on", "off"):
             raise ManifestError(f"{where}: brains.litellm must be auto, on or off (got {mode!r})")
@@ -234,7 +307,7 @@ class Fleet:
 
     @property
     def shared_namespace(self) -> bool:
-        return self.network_mode.startswith("container:")
+        return self.network_mode.startswith("container:") or bool(self.network.get("vpn_service"))
 
     @property
     def platform(self) -> dict:
@@ -297,6 +370,17 @@ class Fleet:
                 f"toolkit {name!r} is referenced but toolkits/{name}/toolkit.yaml does not exist"
             )
         spec = _load_yaml(f)
+        allowed = {"description", "apt", "npm", "uv_tools", "env", "dockerfile", "mcp"}
+        unknown = set(spec) - allowed
+        if unknown:
+            raise ManifestError(f"{f}: unknown toolkit key(s): {', '.join(sorted(unknown))}")
+        for server in spec.get("mcp") or []:
+            if not isinstance(server, dict) or not server.get("name"):
+                raise ManifestError(f"{f}: every mcp entry must be a mapping with a name")
+            if bool(server.get("command")) == bool(server.get("url")):
+                raise ManifestError(
+                    f"{f}: mcp server {server.get('name')!r} needs exactly one of command or url"
+                )
         usage = d / "USAGE.md"
         spec["_usage"] = usage.read_text() if usage.is_file() else ""
         spec["_name"] = name
@@ -340,6 +424,18 @@ class Fleet:
             raise ManifestError(f"{where}: memory.kind {self.memory_kind!r} unknown")
         if self.memory_kind == "hindsight" and not self.memory.get("url"):
             raise ManifestError(f"{where}: memory.kind hindsight needs memory.url")
+        if self.platform_kind == "teams":
+            gateway = str(self.platform.get("gateway_agent") or self.agents[0].name)
+            if gateway not in {agent.name for agent in self.agents}:
+                raise ManifestError(f"{where}: platform.gateway_agent {gateway!r} is not an agent")
+            endpoint = str(self.platform.get("public_endpoint") or "")
+            if not endpoint.startswith("https://"):
+                raise ManifestError(
+                    f"{where}: Teams needs platform.public_endpoint as public HTTPS /api/messages URL"
+                )
+        roster_mode = str((self.raw.get("roster") or {}).get("mode") or "full")
+        if roster_mode not in {"full", "brief", "off"}:
+            raise ManifestError(f"{where}: roster.mode must be full, brief or off")
         if not self.agents:
             raise ManifestError(f"{self.root}: no agents/*/agent.yaml found")
         for t in self.image_toolkits:

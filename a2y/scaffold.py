@@ -6,9 +6,13 @@ rendered deploy tree are committed; `.env` and `volumes/` never are.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import shutil
 from importlib import resources
 from pathlib import Path
+
+from . import __version__
 
 FLEET_YAML = """\
 # The one file that describes this deployment. See docs/architecture.md in the
@@ -32,9 +36,8 @@ network:
   mode: bridge
 
 platform:
-  # Where the agents live. `mattermost` is fully wired (plugins, boards and
-  # playbooks tools, provisioning docs). Other Hermes platforms pass through:
-  # set kind + platform.env with the adapter's variables.
+  # Full-office platforms: mattermost, telegram, slack, discord. Teams is an
+  # enterprise front door; email is an auxiliary per-agent channels.email adapter.
   kind: mattermost
   team: {name}
 
@@ -49,6 +52,13 @@ memory:
 observability:
   # phoenix_url: http://phoenix:6006   # traces: one project per agent
   # prometheus: true                   # acp2api token metrics listener
+
+# Optional endpoint exposed to supervisor digest duties.
+# metrics:
+#   prometheus_url: http://prometheus:9090
+# Subscription windows are declarations because providers change them:
+# accounts:
+#   main-openai: {{window: 7d, reset_anchor: Tuesday, alert_thresholds: [0.8, 0.95]}}
 
 # Merged into every agent.yaml (agent values win). Keep the common brain chain
 # here so an agent file stays a page about the agent, not about plumbing.
@@ -146,13 +156,53 @@ Discipline:
 """
 
 GITIGNORE = """\
-# Secrets live only here.
-.env
+# a2y — do not remove: secrets and runtime state
+deploy/.env
+backup/
 
 # Runtime state: logins, workspaces, Hermes sessions. Containers own the
 # permissions below volumes/, so git must not descend into it.
-volumes/**
+volumes/
 """
+
+REQUIRED_IGNORES = ("deploy/.env", "volumes/", "backup/")
+
+
+def ensure_gitignore(dest: Path) -> bool:
+    """Merge safety patterns without rewriting the repository's own rules."""
+    path = dest / ".gitignore"
+    old = path.read_text() if path.is_file() else ""
+    present = {
+        line.strip() for line in old.splitlines() if line.strip() and not line.lstrip().startswith("#")
+    }
+    missing = [pattern for pattern in REQUIRED_IGNORES if pattern not in present]
+    if not missing:
+        return False
+    prefix = "" if not old or old.endswith("\n") else "\n"
+    block = prefix + ("\n" if old else "") + "# a2y — do not remove\n" + "\n".join(missing) + "\n"
+    path.write_text(old + block)
+    return True
+
+
+def _hash(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
+def write_upgrade_state(dest: Path) -> None:
+    owned = [
+        dest / "image",
+        dest / ".github/workflows/a2y-fleet.yml",
+        dest / ".gitea/workflows/a2y-fleet.yml",
+    ]
+    files = {}
+    for item in owned:
+        paths = sorted(item.rglob("*")) if item.is_dir() else [item]
+        files.update({str(path.relative_to(dest)): _hash(path) for path in paths if path.is_file()})
+    (dest / ".a2y-version").write_text(__version__ + "\n")
+    (dest / ".a2y-upgrade.json").write_text(
+        json.dumps({"version": __version__, "files": files}, indent=2, sort_keys=True) + "\n"
+    )
+
 
 README = """\
 # {name} -- an agent2you fleet
@@ -181,7 +231,8 @@ def init_workspace(dest: Path, name: str, first_agent: str = "ana") -> list[str]
     put(f"agents/{first_agent}/agent.yaml", AGENT_YAML.format(name=first_agent))
     put(f"agents/{first_agent}/SOUL.md", SOUL_MD.format(name=first_agent))
     put("SOUL-shared.md", SOUL_SHARED)
-    put(".gitignore", GITIGNORE)
+    if ensure_gitignore(dest):
+        created.append(".gitignore")
     put("README.md", README.format(name=name))
 
     # Vendor the image build context so the fleet repo is self-contained and the
@@ -191,4 +242,25 @@ def init_workspace(dest: Path, name: str, first_agent: str = "ana") -> list[str]
         src = resources.files("a2y") / "image"
         shutil.copytree(str(src), image_dst)
         created.append("image/")
+    toolkits_dst = dest / "toolkits"
+    if not toolkits_dst.exists():
+        bundled = resources.files("a2y") / "toolkits"
+        shutil.copytree(str(bundled), toolkits_dst)
+        created.append("toolkits/")
+    platforms_dst = dest / "platforms"
+    if not platforms_dst.exists():
+        bundled = resources.files("a2y") / "platforms"
+        shutil.copytree(str(bundled), platforms_dst)
+        created.append("platforms/")
+    workflows = resources.files("a2y") / "fleet_workflows"
+    for forge in ("github", "gitea"):
+        rel = f".{forge}/workflows/a2y-fleet.yml"
+        target = dest / rel
+        if not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((workflows / forge / "a2y-fleet.yml").read_bytes())
+            created.append(rel)
+    state_missing = [p for p in (".a2y-version", ".a2y-upgrade.json") if not (dest / p).exists()]
+    write_upgrade_state(dest)
+    created.extend(state_missing)
     return created

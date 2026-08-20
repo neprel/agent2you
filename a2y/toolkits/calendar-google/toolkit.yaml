@@ -1,0 +1,10 @@
+description: Google Calendar API tools with persistent OAuth tokens
+npm: ["@cocal/google-calendar-mcp@2.6.2"]
+mcp:
+  - name: calendar-google
+    command: google-calendar-mcp
+    args: [start, --enable-tools, "list-calendars,list-events,get-freebusy,create-event,update-event,get-current-time,manage-accounts"]
+    env:
+      PATH: /usr/local/bin:/usr/bin:/bin
+      GOOGLE_OAUTH_CREDENTIALS: /root/.hermes/google-calendar-oauth.json
+      GOOGLE_CALENDAR_MCP_TOKEN_PATH: /root/.hermes/google-calendar-tokens.json

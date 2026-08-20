@@ -1,0 +1,10 @@
+description: CalDAV calendar tools for RFC 4791 servers
+npm: ["caldav-mcp@0.10.0"]
+mcp:
+  - name: calendar-caldav
+    command: caldav-mcp
+    env:
+      PATH: /usr/local/bin:/usr/bin:/bin
+      CALDAV_BASE_URL: "${CALDAV_URL}"
+      CALDAV_USERNAME: "${CALDAV_USER}"
+      CALDAV_PASSWORD: "${CALDAV_PASSWORD}"

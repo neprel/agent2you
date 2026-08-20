@@ -1,0 +1,33 @@
+# Copy entries into the supervisor's agent.yaml. Cron schedules are UTC.
+weekly-cost-digest:
+  name: weekly-cost-digest
+  schedule: "0 9 * * 1"
+  channel: ops
+  instruction: >-
+    Query A2Y_PROMETHEUS_URL with
+    sum(increase(acp2api_tokens_total[7d])) by (agent,executor,account,kind), the same
+    query offset 7d, and sum(increase(acp2api_turns_total[7d])) by
+    (agent,executor,account). Report week-over-week deltas and duty/drill overhead.
+    If Prometheus is absent, use Hermes counters and state explicitly that the digest
+    is degraded.
+quota-forecast:
+  name: quota-forecast
+  schedule: "0 */4 * * *"
+  channel: ops
+  quiet: true
+  instruction: >-
+    Read each subscription account's quota window, reset anchor and alert thresholds
+    from fleet.yaml. Use sum(rate(acp2api_tokens_total[6h])) by (account) and
+    sum(increase(acp2api_tokens_total[7d])) by (account) to forecast exhaustion.
+    Alert before a threshold is crossed and include its reset time. If Prometheus is
+    absent, use Hermes counters and say the forecast is degraded.
+fleet-gardener:
+  name: fleet-gardener
+  schedule: "0 10 * * 1"
+  channel: ops
+  quiet: true
+  instruction: >-
+    Run a2y outdated --json. Once per newly observed version, PROPOSE the plan-01
+    upgrade command and rolling-rebuild impact. Include the _.hint {#pins} ritual.
+    Record proposed versions under ~/.hermes/a2y-gardener.json. Never edit pins,
+    build images, start containers or apply an upgrade.

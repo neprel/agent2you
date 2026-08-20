@@ -13,11 +13,51 @@ on:
 
 jobs:
   test:
+    strategy:
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - uses: astral-sh/setup-uv@eb1897b8dc4b5d5bfe39a428a8f2304605e0983c # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Lint
+        run: uv run --group dev ruff check a2y tests
       - name: Run tests
         run: uv run --group dev pytest -q
       - name: Package builds
         run: uv build
+      - name: Wheel contains vendored runtime and toolkits
+        run: |
+          uv run python - <<'PY'
+          import zipfile, glob
+          names = set(zipfile.ZipFile(glob.glob('dist/*.whl')[0]).namelist())
+          required = {'a2y/bootstrap.md', 'a2y/image/entrypoint.sh',
+                      'a2y/image/a2y-health', 'a2y/image/a2y-duties',
+                      'a2y/toolkits/calendar-caldav/toolkit.yaml',
+                      'a2y/platforms/teams/manifest.json',
+                      'a2y/fleet_workflows/github/a2y-fleet.yml'}
+          missing = required - names
+          assert not missing, missing
+          PY
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Check shell runtime
+        run: shellcheck a2y/image/entrypoint.sh a2y/image/a2y-health
+
+  compose-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: astral-sh/setup-uv@eb1897b8dc4b5d5bfe39a428a8f2304605e0983c # v7.0.0
+      - name: Init, render and validate Compose
+        run: |
+          uv run a2y init /tmp/a2y-smoke --name smoke
+          cd /tmp/a2y-smoke
+          uv run --project "$GITHUB_WORKSPACE" a2y render
+          sed 's/=$/=dummy/' deploy/example.env > deploy/.env
+          docker compose -f deploy/docker-compose.yaml --env-file deploy/.env config -q

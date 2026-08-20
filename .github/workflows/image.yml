@@ -1,0 +1,22 @@
+name: image compatibility
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  push:
+    branches: [main]
+    paths:
+      - "a2y/image/**"
+      - ".github/workflows/image.yml"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Build the complete agent image
+        run: docker build -f a2y/image/agent.dockerfile -t agent2you-ci a2y/image

@@ -4,6 +4,24 @@ Everything an agent needs can be provisioned headlessly EXCEPT its brain — tha
 one step needs a human at a browser, once, and the login then lives in a volume
 that survives every rebuild.
 
+For Telegram, Slack and Discord, `a2y provision <agent>` prints the exact
+one-bot-per-agent setup and `.env` names. Telegram requires Bot-to-Bot Mode and
+privacy/admin configuration; Slack requires Socket Mode (`xoxb` + `xapp`) and
+message events; Discord requires Message Content and Members intents. Missing
+either portal-side permission is a silent no-delivery failure.
+
+Teams is a separate front-door role: its adapter listens on port 3978 at
+`/api/messages`, and Azure Bot Framework must reach it over public HTTPS. There
+is no outbound-only transport equivalent to Slack Socket Mode. The workspace's
+`platforms/teams/manifest.json` is the Teams app-package template; `a2y
+provision` gives the Entra app, Azure Bot, tenant/user allowlist and reverse
+proxy sequence.
+
+An auxiliary `channels.email` uses Hermes' built-in IMAP/SMTP adapter. Use a
+dedicated mailbox and app password, always set `allowed_users`, and never enable
+allow-all. Email auto-reply loops and prompt injection are why this pack treats
+email as reports/approval delivery rather than an autonomous primary office.
+
 The order that works:
 
 1. `a2y render && a2y build`

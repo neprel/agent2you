@@ -61,6 +61,21 @@ plugins load. `mattermost` is the proven branch. The untagged-routing POLICY
 product — a new platform adds a binding that answers the policy's two
 questions, never a second copy of the rules.
 
+Mattermost, Telegram, Slack and Discord are office-shaped: one identity per
+agent, shared rooms and explicit bot-to-bot mentions. Teams is deliberately one
+enterprise front door because Bot Framework bots cannot observe one another;
+email is auxiliary. Do not advertise every adapter Hermes happens to ship—the
+pack supports only the role matrix in docs/architecture.md. Every inbound path
+fails closed on immutable user ids/addresses.
+
+# decision Durable memory is text first {#memory_tiers}
+
+Private local memory is a per-agent `repo: knowledge` HINT repository: curated
+wiki topics and append-only episodic logs are canonical; SQLite FTS is a
+deletable index. Shared project knowledge is an ordinary reviewable git/HINT
+wiki repository, not a shared semantic database. Retraction writes a factual
+`supersedes` tombstone so capture cannot relearn a silently deleted fact.
+
 # decision The bootloader is a prompt, and the supervisor owns the fleet repo {#bootstrap}
 
 `a2y/bootstrap.md` (printed by `a2y bootstrap`, runnable without install via
@@ -99,6 +114,30 @@ in. GitHub Actions are referenced by commit SHA with the tag in a comment;
 bumping one means resolving the new tag's COMMIT sha (annotated tags point at a
 tag object — dereference it), never trusting the tag name. The release
 workflow gates on the test suite and on tag == pyproject version.
+
+# decision Workspace upgrades preserve the ownership boundary {#upgrade}
+
+`image/` and the two `a2y-fleet.yml` CI templates are pack-owned and upgraded by
+an offline three-way comparison against the last recorded normalized hashes.
+Local edits conflict rather than disappear.
+Fleet manifests, agents, toolkits, souls and banks are user-owned and upgrade
+never touches them; `deploy/` is generated and render may prune only its known
+agent/build namespaces. This boundary keeps pin fixes deliverable without
+turning a pack release into authority over operator identity.
+
+# decision Operational checks never repair state {#doctor}
+
+Doctor is read-only: render comparisons happen in a temporary directory and all
+online probes use short explicit timeouts. CI uses `--offline`. A diagnostic that
+rewrites deploy output destroys the evidence it was asked to inspect.
+
+# decision Credentials are portable but always hazardous {#backups}
+
+Backups exclude the re-clonable workspace by default, are mode 0600, and are
+treated exactly like private keys because they contain live OAuth and platform
+state. Agent removal parks volumes unless the operator makes an explicit,
+confirmed purge; an agent name is an identity key, so rename remains
+remove+add+restore rather than a cosmetic mutation.
 
 # decision A toolkit bundles install with usage {#toolkits}
 
@@ -164,7 +203,7 @@ that class of failure extinct.
 
 # good Version discipline in the image {#pins}
 
-Every tool is an ARG pin; raw binaries are checksum-verified against the
+Every tool is an ARG pin (including Hermes' exact upstream commit); raw binaries are checksum-verified against the
 publisher's sums; npm installs use `--include=optional` AND the build asserts
 the Claude Agent SDK platform binary landed (a miss fails every request with a
 content-free `-32603`). Bumping `LITELLM_VERSION` requires checking

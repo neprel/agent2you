@@ -56,6 +56,8 @@ def collect(fleet_dir: Path, me: str) -> list[tuple[str, str, str]]:
         if name == me:
             continue
         desc = " ".join(str(cfg.get("description") or "").split())
+        if os.environ.get("A2Y_ROSTER_MODE", "full") == "brief":
+            desc = desc.split(".", 1)[0].strip() + ("." if "." in desc else "")
         if not desc:
             continue
         port = (cfg.get("ports") or {}).get("a2a")
@@ -65,6 +67,8 @@ def collect(fleet_dir: Path, me: str) -> list[tuple[str, str, str]]:
 
 
 def render(peers: list[tuple[str, str, str]]) -> str:
+    if os.environ.get("A2Y_ROSTER_MODE", "full") == "off":
+        return ""
     lines = [
         "",
         MARKER + " from every agent.yaml in the fleet.",

@@ -4,6 +4,25 @@ Everything here was learned on a running fleet before it became a rule. Where a
 decision looks redundant, ask what each part refuses to do — that is usually the
 reason it exists.
 
+## Platform roles
+
+| platform | role | operational basis |
+| --- | --- | --- |
+| Mattermost | full office | proven source deployment; agents, humans and threads share one workspace |
+| Slack | full office | Socket Mode, real threads and bot-to-bot events when scopes/events are installed |
+| Discord | full office | bot-to-bot messages and threads with Message Content and Members intents |
+| Telegram | full office | bot-to-bot mode, plus privacy/admin settings and explicit loop guards |
+| Microsoft Teams | enterprise front door | public Bot Framework webhook; bots do not receive other bots, so one gateway routes to the fleet |
+| Email | auxiliary per-agent channel | asynchronous digests, reports, approvals and `.ics`; never the primary home |
+
+WhatsApp is not supported: the unofficial bridge risks account bans, while the
+Cloud API's business/session/group constraints cannot host a fleet office.
+Matrix, Signal, ntfy, Rocket.Chat, Zulip and regional platforms are intentionally
+outside this audience-focused pack; revisit only on operator request.
+Every office branch uses one bot/account per agent and fails closed through an
+immutable sender allowlist. Email is additive through `channels.email`; its
+inbound text is untrusted and its allowlist is mandatory.
+
 ## One agent is one container
 
 An agent is **Hermes + litellm + acp2api + the coding CLIs**, built into one
@@ -175,13 +194,52 @@ said, imperfectly reconciled. For what is true, the agents have a shell.
 - Phoenix answers *what the turn did*; Prometheus answers *what it cost*. Token
   counts are not in the spans; do not go looking for that setting.
 
+## Duties and fleet automation
+
+`duties:` in an agent manifest declares recurring Hermes turns. Rendering writes
+`duties.yaml`; container startup reconciles it through Hermes' native cron API,
+whose `last_run_at` is also the source of doctor freshness checks for quiet
+duties. Schedules are five-field numeric cron in **UTC**. Use `1-5`, not
+`mon-fri`. A quiet duty receives the exact `[SILENT]` no-news rule; every other
+duty always posts.
+
+```yaml
+duties:
+  - name: standup
+    schedule: "0 9 * * 1-5"
+    channel: engineering
+    instruction: Post yesterday's landed work, today's plan, and blockers.
+  - name: weekly-report
+    schedule: "0 15 * * 5"
+    channel: ops
+    instruction: Post the weekly delivery and spend report.
+  - name: watch-round
+    schedule: "0 */4 * * *"
+    channel: ops
+    instruction: Check every named dashboard and report only anomalies.
+    quiet: true
+```
+
+Duties are prompted turns, not guarantees: phrase instructions imperatively and
+verify their first runs by eye. They spend real turns and appear in the same
+per-agent metrics. `a2y duties templates` prints cost, quota and proposal-only
+gardener templates. `metrics.prometheus_url` is passed to agents as
+`A2Y_PROMETHEUS_URL`; subscription window/reset/threshold declarations live
+under `accounts:` in fleet.yaml rather than being hard-coded.
+
+`a2y init` ships GitHub and Gitea fleet CI; delete the workflow for the forge
+you do not use. It pins the stamped pack version, proves render drift is absent,
+and runs offline doctor without Docker or real secrets. `a2y drill AGENT` is
+deliberately online and manual: suites live under `drills/AGENT/*.yaml`, use a
+dedicated Mattermost channel, spend real turns, and never run in bare CI.
+
 ## Supply chain posture
 
 Every version is an ARG in the dockerfile; binaries are checksum-verified;
 `CLINE_NO_AUTO_UPDATE=1` is set because cline otherwise reinstalls itself from
 `latest` at startup, defeating the pin inside a container that holds chat
 tokens, memory keys and — worth more than either — the CLIs' OAuth logins.
-Hermes installs from its own installer tracking `main` (pass `--commit` in the
-vendored dockerfile when reproducibility matters more than currency). Version
+Hermes installs from its own installer at the exact `HERMES_COMMIT`; the
+network-only outdated check compares that commit with upstream `main`. Version
 pins verify a number, not an artifact; treat the pins as the cheap half of the
 defence and the login volumes as the thing actually worth stealing.

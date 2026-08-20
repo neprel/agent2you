@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""Tiny MCP stdio server over a durable HINT knowledge repository.
+
+The text repository is canonical. SQLite FTS is a disposable index rebuilt on
+startup, keeping backup/retraction ordinary git operations.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sqlite3
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+TOOLS = [
+    {"name": "memory_search", "description": "Search durable private memory", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
+    {"name": "memory_store", "description": "Store a durable observation", "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}, "source": {"type": "string"}}, "required": ["text"]}},
+    {"name": "memory_retract", "description": "Mark knowledge as outdated", "inputSchema": {"type": "object", "properties": {"topic": {"type": "string"}, "superseded_by": {"type": "string"}}, "required": ["topic"]}},
+]
+
+
+class Store:
+    def __init__(self, root: Path):
+        self.root = root
+        (root / "log").mkdir(parents=True, exist_ok=True)
+        (root / "wiki").mkdir(exist_ok=True)
+        config = root / "hint.yml"
+        if not config.exists():
+            config.write_text("name: private-memory\nrepo: knowledge\nbooks:\n  - npm://@openhint/hintbook-librarian\n")
+        self.db = sqlite3.connect(root / ".index.sqlite")
+        self.db.execute("CREATE VIRTUAL TABLE IF NOT EXISTS memory USING fts5(path, text)")
+        self.reindex()
+
+    def reindex(self):
+        self.db.execute("DELETE FROM memory")
+        for path in sorted([*self.root.glob("log/*.hint"), *self.root.glob("wiki/**/*.hint")]):
+            self.db.execute("INSERT INTO memory VALUES (?, ?)", (str(path.relative_to(self.root)), path.read_text()))
+        self.db.commit()
+
+    def search(self, query: str):
+        words = [w for w in query.replace('"', " ").split() if w]
+        if not words:
+            return []
+        rows = self.db.execute("SELECT path, snippet(memory, 1, '[', ']', '…', 24) FROM memory WHERE memory MATCH ? ORDER BY rank LIMIT 8", (" OR ".join(words),)).fetchall()
+        return [{"ref": row[0], "excerpt": row[1]} for row in rows]
+
+    def store(self, text: str, source: str = "operator"):
+        # Exact/near textual duplicate guard: normalized containment catches the
+        # runaway repeated-observation shape without adding an online model.
+        norm = " ".join(text.casefold().split())
+        for path in self.root.glob("log/*.hint"):
+            if norm and norm in " ".join(path.read_text().casefold().split()):
+                return {"merged": True, "ref": str(path.relative_to(self.root))}
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        path = self.root / "log" / f"{day}.hint"
+        stamp = datetime.now(timezone.utc).isoformat()
+        with path.open("a") as fh:
+            fh.write(f"\n# observation {stamp}\n# evidence source={source}\n{text.strip()}\n")
+        self.reindex()
+        return {"merged": False, "ref": str(path.relative_to(self.root))}
+
+    def retract(self, topic: str, replacement: str = ""):
+        slug = "-".join(topic.casefold().split())[:60] or "knowledge"
+        path = self.root / "wiki" / slug / "_.hint"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        date = datetime.now(timezone.utc).date().isoformat()
+        path.write_text(f"# supersedes {topic}\n{topic} is outdated since {date}." + (f" Superseded by {replacement}." if replacement else "") + "\n")
+        self.reindex()
+        return {"ref": str(path.relative_to(self.root))}
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--repo", type=Path, required=True)
+    store = Store(parser.parse_args().repo)
+    for line in sys.stdin:
+        try:
+            req = json.loads(line)
+            method = req.get("method")
+            if method == "initialize":
+                result = {"protocolVersion": "2025-03-26", "capabilities": {"tools": {}}, "serverInfo": {"name": "a2y-memory", "version": "1"}}
+            elif method == "tools/list":
+                result = {"tools": TOOLS}
+            elif method == "tools/call":
+                name, args = req["params"]["name"], req["params"].get("arguments") or {}
+                value = store.search(args["query"]) if name == "memory_search" else store.store(args["text"], args.get("source", "operator")) if name == "memory_store" else store.retract(args["topic"], args.get("superseded_by", ""))
+                result = {"content": [{"type": "text", "text": json.dumps(value, ensure_ascii=False)}]}
+            else:
+                continue
+            print(json.dumps({"jsonrpc": "2.0", "id": req.get("id"), "result": result}), flush=True)
+        except Exception as exc:
+            print(json.dumps({"jsonrpc": "2.0", "id": req.get("id") if 'req' in locals() else None, "error": {"code": -32603, "message": str(exc)}}), flush=True)
+
+
+if __name__ == "__main__":
+    main()

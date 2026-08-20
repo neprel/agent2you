@@ -1,0 +1,13 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.19/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.19",
+  "version": "1.0.0",
+  "id": "${TEAMS_CLIENT_ID}",
+  "packageName": "dev.agent2you.frontdoor",
+  "developer": {"name": "agent2you operator", "websiteUrl": "https://github.com/neprel/agent2you", "privacyUrl": "https://github.com/neprel/agent2you", "termsOfUseUrl": "https://github.com/neprel/agent2you"},
+  "name": {"short": "agent2you", "full": "agent2you fleet front door"},
+  "description": {"short": "Front door to an agent2you fleet", "full": "A human-to-fleet front door. Teams bots do not form an agent office."},
+  "bots": [{"botId": "${TEAMS_CLIENT_ID}", "scopes": ["personal", "team", "groupChat"], "isNotificationOnly": false, "supportsFiles": true}],
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": ["${PUBLIC_ENDPOINT_HOST}"]
+}

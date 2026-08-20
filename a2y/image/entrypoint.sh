@@ -36,6 +36,7 @@ out = {
     "MATTERMOST_REQUIRE_MENTION": mm.get("require_mention"),
     "HINDSIGHT_MODE": mem.get("mode"),
     "HINDSIGHT_API_URL": mem.get("url"),
+    "A2Y_WIKI_PROJECTS": __import__("json").dumps((c.get("knowledge") or {}).get("projects") or []),
 }
 if p.get("acp2api"):
     out["ACP2API_BASE_URL"] = f"http://127.0.0.1:{p['acp2api']}/v1"
@@ -133,6 +134,9 @@ for f in config.yaml SOUL.md; do
         log "  ${f}"
     fi
 done
+log "Step 3d: Reconciling declarative Hermes duties (UTC)"
+/opt/agent/bin/a2y-duties "${AGENT_CONFIG_DIR}/duties.yaml" \
+    || die "could not reconcile duties" "Hermes cron"
 # Plugins ship in the IMAGE: they are code, not identity, and the same for every
 # agent. $HERMES_HOME/plugins is volume state, so they are copied in on every
 # start -- the image decides what runs, not whatever the volume remembers.
@@ -249,6 +253,23 @@ if [ -n "${GH_TOKEN:-}" ]; then
         git config --global "url.https://x-access-token:${GH_TOKEN}@github.com/.insteadOf" "$form"
     done
     log "  github: token from GH_TOKEN, and git rewrites ssh remotes onto it"
+fi
+
+log "Step 3e: Checking out declared project knowledge repositories"
+if [ -n "${A2Y_WIKI_PROJECTS:-}" ]; then
+    while IFS=$'\t' read -r _name _url; do
+        [ -n "${_name}" ] || continue
+        _dir="/work/${_name}-wiki"
+        if [ -d "${_dir}/.git" ]; then
+            git -C "${_dir}" pull --ff-only || log "  WARNING: could not refresh ${_name} wiki"
+        elif [ -n "${_url}" ]; then
+            git clone "${_url}" "${_dir}" || log "  WARNING: could not clone ${_name} wiki"
+        else
+            log "  WARNING: ${_name} wiki has no memory.projects.${_name}.url"
+        fi
+    done < <(/opt/agent/hermes-agent/venv/bin/python3 -c 'import json,os
+for p in json.loads(os.environ.get("A2Y_WIKI_PROJECTS", "[]")):
+ print("%s\t%s" % (p.get("name", ""), p.get("url") or ""))')
 fi
 
 log "Step 4: Writing ${HERMES_HOME}/.env from the container environment"
