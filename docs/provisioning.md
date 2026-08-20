@@ -68,6 +68,59 @@ Other platforms: create the bot/account per that platform's docs and put the
 adapter's variables into `platform.env` in fleet.yaml; the entrypoint passes
 `TELEGRAM_*` / `SLACK_*` / `DISCORD_*` through to Hermes.
 
+### Voice notes
+
+Inbound chat voice notes work with no manifest setting: Hermes defaults to
+local faster-whisper `base`, and ffmpeg is baked into the image. Configure only
+when the default is insufficient:
+
+```yaml
+voice:
+  enabled: true
+  provider: local
+  language: ru
+  model: large-v3-turbo
+  tts: true                 # optional replies via free Edge TTS
+```
+
+`base` is weak for Russian. Local `large-v3-turbo` is the inexpensive upgrade
+(roughly 1.5 GB RAM and around realtime on CPU). Cloud providers `groq`,
+`openai`, `mistral`, `xai`, `elevenlabs`, and `deepinfra` are supported; render
+adds the exact provider key to `example.env`. OpenAI voice uses
+`VOICE_TOOLS_OPENAI_KEY`, never `OPENAI_API_KEY`, so it cannot collide with the
+fleet's brain-auth invariant.
+
+For higher RU+EN CPU throughput, operate a sherpa-onnx or Speaches sidecar with
+Parakeet-TDT-0.6B-v3 (CC-BY, about 2 GB RAM). GigaAM v3 (MIT) offers a higher
+Russian ceiling. Connect either through Hermes `stt.providers` or
+`HERMES_LOCAL_STT_COMMAND` using an agent override; the pack does not render a
+sidecar until a real fleet needs that branch.
+
+Hermes STT is for short voice notes. Attach long recordings to the one agent
+carrying `toolkits: [transcribe]`; its instructions produce a transcript file,
+thread summary and action items. Telegram bots can download only files around
+20 MB through `getFile`, so Mattermost or a workspace file is the reliable path
+for meetings. Recording consent and legal compliance are the deploying
+recorder's responsibility.
+
+After building a transcribe agent, run `a2y models pull <agent>` once. With no
+token it pulls the Whisper weights and selects the valid fallback diarization
+tier; until then transcription alone is unavailable and the rest of the agent
+starts normally. To enable the higher-quality pyannote `community-1` tier:
+
+1. Create a free account at huggingface.co.
+2. Open `huggingface.co/pyannote/speaker-diarization-community-1` and accept its conditions; a token alone is not enough.
+3. Open Settings, then Access Tokens, and create a token with READ access.
+4. Put the token in `deploy/.env` as `HF_TOKEN=...`.
+5. Run `a2y models pull <agent>` for the agent that transcribes recordings.
+
+The host-side pull command uses the token only for the gated download; it never
+enters the image, build arguments, Compose, runtime environment, or store
+manifest. Models land in `volumes/models/`, their actual revision and hashes
+are recorded, and the pinned toolkit runtime loads them once offline before the
+store is accepted. Without a token the equally valid `fallback` tier is pulled
+and one informational upgrade pointer is printed.
+
 ## 2. Brains (the step nobody can automate)
 
 `a2y auth <agent>` prints per-agent instructions. The rules that matter:

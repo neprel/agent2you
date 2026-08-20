@@ -1,0 +1,189 @@
+description: Offline long-form transcription with two-tier speaker diarization
+env:
+  A2Y_TRANSCRIBE_MODEL: /models/transcribe/whisper-large-v3-turbo
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+models:
+  - name: whisper-large-v3-turbo
+    repo: mobiuslabsgmbh/faster-whisper-large-v3-turbo
+    path: transcribe/whisper-large-v3-turbo
+    files: [config.json, model.bin, preprocessor_config.json, tokenizer.json, vocabulary.json]
+  - name: pyannote-community-1
+    repo: pyannote/speaker-diarization-community-1
+    path: transcribe/pyannote-community-1
+    gated: true
+    tier: community-1
+    files:
+      - config.yaml
+      - embedding/pytorch_model.bin
+      - plda/plda.npz
+      - plda/xvec_transform.npz
+      - segmentation/pytorch_model.bin
+model_check: [a2y-transcribe, --check]
+dockerfile: |
+  # Code is pinned in the reusable derived image. Model weights live only in
+  # the host-side /models store populated by `a2y models pull`.
+  RUN uv venv --python /usr/bin/python3 /opt/transcribe \
+      && arch="$(dpkg --print-architecture)" \
+      && case "$arch" in amd64) codec=0.7.0 ;; arm64) codec=0.16.0 ;; *) exit 1 ;; esac \
+      && uv pip install --no-cache --python /opt/transcribe/bin/python \
+        "whisperx==3.8.6" "faster-whisper==1.2.1" \
+        "torch==2.8.0" "torchaudio==2.8.0" "torchvision==0.23.0" \
+        "torchcodec==$codec" "pyannote-audio==4.0.7" \
+        "librosa==1.0.0" "scikit-learn==1.9.0" \
+      && /opt/transcribe/bin/python -c \
+        "import faster_whisper, librosa, pyannote.audio, sklearn, whisperx"
+  RUN <<'SCRIPT'
+  set -eu
+  cat >/usr/local/bin/a2y-transcribe <<'PY'
+  #!/opt/transcribe/bin/python
+  import argparse
+  import json
+  import os
+  import subprocess
+  import tempfile
+  from pathlib import Path
+
+  COMMUNITY_MODEL = Path("/models/transcribe/pyannote-community-1")
+
+  def stamp(seconds):
+      seconds = max(0, int(seconds))
+      return f"{seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
+
+  def store_tier():
+      manifest = Path("/models/manifest.json")
+      if not manifest.is_file():
+          return "fallback"
+      return str((json.loads(manifest.read_text()) or {}).get("tier") or "fallback")
+
+  def require_model(model):
+      if (model / "model.bin").is_file():
+          return
+      agent = os.environ.get("AGENT_NAME", "<agent>")
+      raise SystemExit(
+          f"model whisper-large-v3-turbo not in /models — run `a2y models pull {agent}`"
+      )
+
+  def load_engines(model, tier, device, compute):
+      from faster_whisper import WhisperModel
+      engine = WhisperModel(str(model), device=device, compute_type=compute)
+      diarizer = None
+      if tier == "community-1":
+          if not (COMMUNITY_MODEL / "config.yaml").is_file():
+              agent = os.environ.get("AGENT_NAME", "<agent>")
+              raise SystemExit(
+                  f"model pyannote-community-1 not in /models — run `a2y models pull {agent}`"
+              )
+          from pyannote.audio import Pipeline
+          import torch
+          diarizer = Pipeline.from_pretrained(str(COMMUNITY_MODEL))
+          diarizer.to(torch.device(device))
+      elif tier != "fallback":
+          raise SystemExit(f"unknown diarization tier in /models/manifest.json: {tier}")
+      return engine, diarizer
+
+  def main():
+      parser = argparse.ArgumentParser(description="Offline ASR plus two-tier speaker diarization")
+      parser.add_argument("audio", nargs="?")
+      parser.add_argument("--output", type=Path)
+      parser.add_argument("--language")
+      parser.add_argument("--speakers", type=int, default=2)
+      parser.add_argument("--check", action="store_true")
+      args = parser.parse_args()
+      model = Path(os.environ.get("A2Y_TRANSCRIBE_MODEL", "/models/transcribe/whisper-large-v3-turbo"))
+      tier = store_tier()
+      require_model(model)
+
+      import torch
+      device = "cuda" if torch.cuda.is_available() else "cpu"
+      compute = "float16" if device == "cuda" else "int8"
+      engine, diarizer = load_engines(model, tier, device, compute)
+      if args.check:
+          subprocess.run(["ffmpeg", "-version"], check=True, stdout=subprocess.DEVNULL)
+          import whisperx  # noqa: F401
+          print(f"transcribe toolkit OK: tier={tier}; pulled models load offline")
+          return
+      if not args.audio:
+          parser.error("audio is required unless --check is used")
+      if args.speakers < 1:
+          parser.error("--speakers must be at least 1")
+
+      import librosa
+      import numpy as np
+      from scipy.io import wavfile
+      from sklearn.cluster import AgglomerativeClustering
+
+      source = Path(args.audio)
+      output = args.output or source.with_suffix("")
+      output.parent.mkdir(parents=True, exist_ok=True)
+      with tempfile.TemporaryDirectory(prefix="a2y-transcribe-") as temp:
+          wav = Path(temp) / "audio.wav"
+          subprocess.run(
+              ["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-i", str(source),
+               "-ac", "1", "-ar", "16000", str(wav)], check=True
+          )
+          stream, info = engine.transcribe(str(wav), language=args.language, vad_filter=True)
+          segments = [
+              {"start": item.start, "end": item.end, "text": item.text.strip()}
+              for item in stream if item.text.strip()
+          ]
+          rate, samples = wavfile.read(wav)
+          samples = samples.astype(np.float32) / max(1, np.iinfo(samples.dtype).max)
+          if tier == "community-1":
+              result = diarizer(
+                  {"waveform": torch.from_numpy(samples).unsqueeze(0), "sample_rate": rate}
+              )
+              annotation = getattr(result, "speaker_diarization", result)
+              turns = [
+                  (turn.start, turn.end, speaker)
+                  for turn, _, speaker in annotation.itertracks(yield_label=True)
+              ]
+              speaker_ids = {name: i + 1 for i, name in enumerate(sorted({x[2] for x in turns}))}
+              for item in segments:
+                  overlap = {}
+                  for start, end, speaker in turns:
+                      amount = max(0.0, min(item["end"], end) - max(item["start"], start))
+                      overlap[speaker] = overlap.get(speaker, 0.0) + amount
+                  chosen = max(overlap, key=overlap.get) if overlap else "unknown"
+                  item["speaker"] = f"Speaker-{speaker_ids.get(chosen, 0)}"
+          else:
+              embeddings = []
+              for item in segments:
+                  start = max(0, int(item["start"] * rate))
+                  end = min(len(samples), int(item["end"] * rate))
+                  utterance = samples[start:end]
+                  minimum = int(rate * 0.4)
+                  if len(utterance) < minimum:
+                      utterance = np.pad(utterance, (0, minimum - len(utterance)))
+                  mfcc = librosa.feature.mfcc(y=utterance, sr=rate, n_mfcc=20)
+                  embeddings.append(np.concatenate([mfcc.mean(axis=1), mfcc.std(axis=1)]))
+              count = min(args.speakers, len(embeddings))
+              if count > 1:
+                  labels = AgglomerativeClustering(
+                      n_clusters=count, metric="cosine", linkage="average"
+                  ).fit_predict(embeddings)
+              else:
+                  labels = np.zeros(len(segments), dtype=int)
+              for item, label in zip(segments, labels, strict=True):
+                  item["speaker"] = f"Speaker-{int(label) + 1}"
+
+      payload = {
+          "source": str(source), "language": info.language,
+          "language_probability": info.language_probability, "model": model.name,
+          "diarization": tier, "segments": segments,
+      }
+      Path(str(output) + ".json").write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+      lines = [f"# Transcript: {source.name}", ""]
+      lines += [
+          f"[{stamp(s['start'])}–{stamp(s['end'])}] **{s['speaker']}**: {s['text']}"
+          for s in segments
+      ]
+      Path(str(output) + ".md").write_text("\n\n".join(lines) + "\n")
+      print(f"wrote {output}.md and {output}.json")
+
+  if __name__ == "__main__":
+      main()
+  PY
+  chmod 0755 /usr/local/bin/a2y-transcribe
+  ln -s /usr/local/bin/a2y-transcribe /usr/local/bin/transcribe-recording
+  SCRIPT

@@ -8,6 +8,11 @@ sessions, the working checkout, and local memory. `deploy/.env` and
 `volumes/*/hermes/.env` contain live secrets on the host; use encrypted disks
 and restrictive home-directory permissions.
 
+For a browser agent, the same volume also contains `browser/profile`: live web
+cookies and account sessions with credential-level sensitivity. It is included
+in cold backups automatically. A headed Chromium workload commonly needs 1–2
+GB at peak, so size that agent's `resources.memory` separately from the fleet.
+
 Run `a2y backup <agent> --cold` on a cadence appropriate to the work. The
 0600 archive contains live credentials and excludes `workspace/` by default;
 add `--include-work` for irreplaceable uncommitted work. For migration: copy the
@@ -36,6 +41,23 @@ parity, pack/image versions, known credential expiry fields, git tracking and
 permissions, then probes the platform with a three-second timeout. Use
 `--offline` in CI. A Mattermost token absent from `A2Y_MATTERMOST_ALLOWED_USERS`
 is a real failure: colleagues otherwise disappear silently.
+
+The version check is three-way: installed `a2y`, the workspace `.a2y-version`,
+and `org.agent2you.version` on every base/derived image used by the fleet. A
+skew means the generated deployment and executable may disagree; run `a2y
+upgrade`, rerender and rebuild instead of suppressing it. Offline doctor checks
+the first two and explicitly reports the image probe as skipped.
+
+For agents carrying `browser`, online doctor also launches headed Chromium,
+checks the Playwright MCP executable and persistent profile, and probes noVNC
+when enabled. A successful HTTP probe does not make noVNC safe to publish: keep
+the generated loopback bind and reach it through SSH forwarding.
+
+Model-bearing toolkits use the shared `volumes/models/` store. `a2y models
+pull` is the only writer; containers mount it at `/models:ro`. Doctor displays
+the recorded tier, revision, pull time and verifies the recorded file hashes.
+An absent store is informational—the rest of the agent starts normally—and
+names the exact pull command that enables the capability.
 
 ## Rotation
 

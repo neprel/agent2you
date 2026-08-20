@@ -36,6 +36,9 @@ jobs:
           v="$(grep -m1 '^version' pyproject.toml | cut -d'"' -f2)"
           [ "v${v}" = "${GITHUB_REF_NAME}" ] || {
             echo "tag ${GITHUB_REF_NAME} != pyproject version v${v}"; exit 1; }
+          image_v="$(grep -m1 '^ARG AGENT2YOU_VERSION=' a2y/image/agent.dockerfile | cut -d= -f2)"
+          [ "${image_v}" = "${v}" ] || {
+            echo "dockerfile AGENT2YOU_VERSION ${image_v} != pyproject version ${v}"; exit 1; }
 
       - name: Tests gate the release
         run: uv run --group dev pytest -q

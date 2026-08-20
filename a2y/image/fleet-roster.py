@@ -108,7 +108,15 @@ def main(argv: list[str]) -> int:
         return 0
 
     peers = collect(fleet_dir, me)
-    wanted = source.read_text().rstrip("\n") + "\n" + render(peers)
+    tier = os.environ.get("A2Y_DIARIZATION_TIER", "")
+    model_manifest = Path("/models/manifest.json")
+    if not tier and model_manifest.is_file():
+        try:
+            tier = str(__import__("json").loads(model_manifest.read_text()).get("tier") or "")
+        except (OSError, ValueError):
+            tier = ""
+    identity = source.read_text().replace("{{A2Y_DIARIZATION_TIER}}", tier or "models-not-pulled")
+    wanted = identity.rstrip("\n") + "\n" + render(peers)
 
     if target.is_file() and target.read_text() == wanted:
         return 0

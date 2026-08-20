@@ -4,34 +4,14 @@ on:
   schedule:
     - cron: "17 4 * * 1"
   workflow_dispatch:
-  workflow_run:
-    workflows: [release]
-    types: [completed]
+
+concurrency:
+  group: image-compatibility
+  cancel-in-progress: true
 
 jobs:
-  package-ready:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-        with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-      - uses: astral-sh/setup-uv@eb1897b8dc4b5d5bfe39a428a8f2304605e0983c # v7.0.0
-      - name: Wait for the release to reach the package index
-        shell: bash
-        run: |
-          version="$(grep -m1 '^version' pyproject.toml | cut -d'"' -f2)"
-          for attempt in $(seq 1 30); do
-            if uvx --isolated --no-cache --from "agent2you==${version}" a2y --version; then
-              exit 0
-            fi
-            echo "agent2you ${version} is not resolvable yet (attempt ${attempt}/30)"
-            sleep 10
-          done
-          exit 1
-
   build:
-    needs: package-ready
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -39,7 +19,63 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-        with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: astral-sh/setup-uv@eb1897b8dc4b5d5bfe39a428a8f2304605e0983c # v7.0.0
       - name: Build the complete agent image
-        run: docker build -f a2y/image/agent.dockerfile -t agent2you-ci a2y/image
+        run: docker build -f a2y/image/agent.dockerfile -t agent2you/compat:0.1.0 a2y/image
+
+      - name: Render bundled heavy-toolkit images
+        shell: bash
+        run: |
+          root="$RUNNER_TEMP/a2y-compat"
+          uv run a2y init "$root" --name compat --agent base
+          cd "$root"
+          uv run --project "$GITHUB_WORKSPACE" a2y agent add web \
+            --description "Browser compatibility probe" --toolkits browser --no-render
+          uv run --project "$GITHUB_WORKSPACE" a2y agent add scribe \
+            --description "Transcription compatibility probe" --toolkits transcribe
+          docker build -f deploy/build/agent-web.dockerfile -t agent2you-browser-ci .
+
+      - name: Runtime-smoke browser and noVNC
+        shell: bash
+        run: |
+          browser_state="$RUNNER_TEMP/browser-state"
+          mkdir -p "$browser_state"
+          docker run --rm --network none \
+            -v "$browser_state:/browser" \
+            --entrypoint a2y-browser-check agent2you-browser-ci
+          docker run -d --name a2y-browser-novnc \
+            -e A2Y_NOVNC_PASSWORD=compatibility-only \
+            -p 127.0.0.1:6080:6080 -v "$browser_state:/browser" \
+            --entrypoint /usr/bin/tini agent2you-browser-ci \
+            -- /usr/local/bin/a2y-browser-novnc
+          trap 'docker rm -f a2y-browser-novnc >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:6080/vnc.html >/dev/null && break
+            [ "$attempt" -lt 30 ] || exit 1
+            sleep 1
+          done
+          docker rm -f a2y-browser-novnc >/dev/null
+          trap - EXIT
+
+      - name: Build transcription toolkit image
+        run: |
+          docker image rm agent2you-browser-ci
+          docker builder prune -af
+          cd "$RUNNER_TEMP/a2y-compat"
+          docker build -f deploy/build/agent-scribe.dockerfile -t agent2you-transcribe-ci .
+
+      - name: Runtime-smoke empty model store
+        shell: bash
+        run: |
+          empty_models="$RUNNER_TEMP/empty-models"
+          mkdir -p "$empty_models"
+          docker run --rm --network none --entrypoint true agent2you-transcribe-ci
+          if output="$(docker run --rm --network none \
+              -e AGENT_NAME=scribe -v "$empty_models:/models:ro" \
+              --entrypoint a2y-transcribe agent2you-transcribe-ci --check 2>&1)"; then
+            echo "transcribe check unexpectedly accepted an empty model store" >&2
+            exit 1
+          fi
+          grep -F "model whisper-large-v3-turbo not in /models — run \`a2y models pull scribe\`" \
+            <<<"$output"
+          ! docker history --no-trunc agent2you-transcribe-ci | grep -F HF_TOKEN

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import importlib.metadata
 import json
 import re
 import socket
@@ -67,22 +69,51 @@ def check_env(fleet: Fleet, env: dict, _opts: DoctorOptions):
 
 
 def check_version(fleet: Fleet, _env: dict, _opts: DoctorOptions):
+    try:
+        installed = importlib.metadata.version("agent2you")
+    except importlib.metadata.PackageNotFoundError:
+        installed = __version__
     stamp = fleet.root / ".a2y-version"
     current = stamp.read_text().strip() if stamp.is_file() else "unknown"
-    if current != __version__:
-        return "problem", f"workspace pack is {current}, installed pack is {__version__}; run `a2y upgrade`"
-    dockerfile = fleet.root / "image" / "agent.dockerfile"
-    match = (
-        re.search(r"^ARG AGENT2YOU_VERSION=(.+)$", dockerfile.read_text(), re.M)
-        if dockerfile.is_file()
-        else None
+    if current != installed:
+        return "problem", f"workspace pack is {current}, installed pack is {installed}; run `a2y upgrade`"
+    if _opts.offline:
+        return "ok", f"workspace and installed pack are {installed}; image label skipped offline"
+
+    image_root = _env.get("A2Y_IMAGE") or fleet.image_tag
+    images = sorted(
+        {f"{image_root}-{agent.name}" if agent.toolkits else image_root for agent in fleet.agents}
     )
-    if match and match.group(1).strip() != __version__:
+    labels: dict[str, str] = {}
+    for image in images:
+        try:
+            probe = subprocess.run(
+                [
+                    "docker",
+                    "image",
+                    "inspect",
+                    image,
+                    "--format",
+                    '{{ index .Config.Labels "org.agent2you.version" }}',
+                ],
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            return "problem", "Docker is unavailable; run doctor on the daemon host"
+        if probe.returncode:
+            return "problem", f"cannot inspect {image}; run `a2y build`"
+        labels[image] = probe.stdout.strip() or "missing"
+
+    skew = [f"{image} label={label}" for image, label in labels.items() if label != installed]
+    if skew:
         return (
             "problem",
-            f"image embeds a2y {match.group(1).strip()}, installed pack is {__version__}; run `a2y upgrade`",
+            f"version skew: installed/workspace={installed}; "
+            + ", ".join(skew)
+            + "; run `a2y build` with this installed pack, or use --a2y-version intentionally",
         )
-    return "ok", f"workspace and pack are {__version__}"
+    return "ok", f"installed pack, workspace and image labels are {installed}"
 
 
 def _expiry(path: Path):
@@ -207,6 +238,89 @@ def check_hygiene(fleet: Fleet, _env: dict, _opts: DoctorOptions):
     )
 
 
+def check_browser(fleet: Fleet, env: dict, opts: DoctorOptions):
+    agents = [agent for agent in fleet.agents if "browser" in agent.toolkits]
+    if not agents:
+        return "info", "no agent carries the browser toolkit"
+    if opts.offline:
+        return "info", "browser runtime checks skipped offline"
+    failures = []
+    for agent in agents:
+        try:
+            probe = subprocess.run(
+                ["docker", "exec", agent.container, "a2y-browser-check"],
+                capture_output=True,
+                text=True,
+                timeout=max(30.0, opts.timeout),
+            )
+            if probe.returncode:
+                detail = (probe.stderr or probe.stdout).strip().splitlines()
+                failures.append(f"{agent.name}: {(detail[-1] if detail else 'browser check failed')}")
+                continue
+            if agent.browser_novnc:
+                port = env.get(f"{agent.env_prefix}_BROWSER_NOVNC_PORT", "")
+                if not port:
+                    failures.append(f"{agent.name}: noVNC port is unset")
+                    continue
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/vnc.html", timeout=opts.timeout
+                ) as response:
+                    if response.status >= 400:
+                        failures.append(f"{agent.name}: noVNC returned HTTP {response.status}")
+        except (OSError, subprocess.TimeoutExpired, urllib.error.URLError) as exc:
+            failures.append(f"{agent.name}: {exc}")
+    if failures:
+        return "problem", "; ".join(failures)
+    return "ok", "Chromium launches, Playwright MCP responds, profiles are writable and noVNC is reachable"
+
+
+def check_models(fleet: Fleet, _env: dict, _opts: DoctorOptions):
+    agents = [agent for agent in fleet.agents if agent.model_specs]
+    if not agents:
+        return "info", "no agent carries a toolkit with external models"
+    store = fleet.root / "volumes" / "models"
+    manifest_path = store / "manifest.json"
+    if not manifest_path.is_file():
+        names = ", ".join(agent.name for agent in agents)
+        return "info", f"model store is empty for {names}; run `a2y models pull {agents[0].name}`"
+    try:
+        manifest = json.loads(manifest_path.read_text())
+        entries = {str(item["path"]): item for item in manifest.get("models") or []}
+    except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        return "info", f"model store manifest is unreadable ({exc}); rerun `a2y models pull`"
+
+    issues = []
+    tier = str(manifest.get("tier") or "fallback")
+    for agent in agents:
+        for model in agent.model_specs:
+            if model.get("gated") and tier != str(model.get("tier")):
+                continue
+            path = str(model["path"])
+            entry = entries.get(path)
+            if not entry:
+                issues.append(f"{agent.name}:{model['name']} absent (run `a2y models pull {agent.name}`)")
+                continue
+            for relative, expected in (entry.get("sha256") or {}).items():
+                target = store / path / str(relative)
+                if not target.is_file():
+                    issues.append(f"{model['name']}/{relative} absent")
+                    continue
+                digest = hashlib.sha256()
+                with target.open("rb") as stream:
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                if digest.hexdigest() != expected:
+                    issues.append(f"{model['name']}/{relative} checksum changed")
+    if issues:
+        return "info", f"tier={tier}; " + "; ".join(issues)
+    revisions = ", ".join(
+        f"{item.get('name')}@{str(item.get('revision', 'unknown'))[:12]} "
+        f"(pulled {item.get('pulled_at') or manifest.get('pulled_at')})"
+        for item in manifest.get("models") or []
+    )
+    return "ok", f"model store tier={tier}; checksums match; {revisions}"
+
+
 def _get_json(url: str, token: str = "", timeout: float = 3.0, scheme: str = "Bearer"):
     request = urllib.request.Request(url)
     if token:
@@ -306,6 +420,8 @@ CHECKS = [
     ("brains", check_logins),
     ("duties", check_duties),
     ("hygiene", check_hygiene),
+    ("models", check_models),
+    ("browser", check_browser),
     ("platform", check_platform),
 ]
 

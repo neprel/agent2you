@@ -219,3 +219,20 @@ keep shipping `a2y/image/**` as package data (the wheel is what `a2y init`
 vendors from); a change that drops it breaks init only at the user's machine.
 Full smoke: init a workspace, render, `docker compose config -q` with a filled
 `.env`.
+
+`a2y build` injects the installed package version into every Docker build and
+images carry `org.agent2you.version`. Development metadata is not a publishable
+dependency: a dev/local CLI loudly falls back to the Dockerfile ARG unless the
+operator supplies `--a2y-version` for an already published release. Keep the
+tag, pyproject version and Docker ARG identical; release CI enforces the
+triangle and doctor checks installed/workspace/image at runtime.
+
+# model store {#model_store}
+
+Large model weights never belong to an image layer or container-owned volume.
+Toolkits declare model ids/files plus a pinned-runtime load check; `a2y models
+pull` downloads into the host-owned `volumes/models/`, records the served
+revision/date/hashes, validates through the derived image with networking off,
+and containers mount the accepted store read-only. `HF_TOKEN` is host-pull-only:
+never pass it to build, Compose or a runtime container. An absent model disables
+that capability without preventing the rest of the agent from starting.

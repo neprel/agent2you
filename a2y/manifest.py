@@ -37,6 +37,7 @@ PORTS_DEFAULT = {"acp2api": 10021, "litellm": 10022, "a2a": 10023, "metrics": 10
 KNOWN_EXECUTOR_KINDS = {"claude", "codex", "opencode", "cline", "custom", "openai", "api"}
 KNOWN_PLATFORMS = {"mattermost", "telegram", "slack", "discord", "teams", "none"}
 KNOWN_MEMORY = {"hindsight", "local", "none"}
+KNOWN_STT_PROVIDERS = {"local", "groq", "openai", "mistral", "xai", "elevenlabs", "deepinfra"}
 
 
 class ManifestError(Exception):
@@ -127,6 +128,26 @@ class Agent:
     @property
     def toolkits(self) -> list[str]:
         return [str(t) for t in (self.raw.get("toolkits") or [])]
+
+    @property
+    def model_specs(self) -> list[dict]:
+        models = []
+        for toolkit in [*self.fleet.image_toolkits, *self.toolkits]:
+            for model in self.fleet.load_toolkit(toolkit).get("models") or []:
+                models.append({**model, "_toolkit": toolkit})
+        return models
+
+    @property
+    def browser(self) -> dict:
+        return self.raw.get("browser") or {}
+
+    @property
+    def browser_novnc(self) -> bool:
+        return bool(self.browser.get("novnc", False))
+
+    @property
+    def voice(self) -> dict:
+        return self.raw.get("voice") or {}
 
     # ---- brain topology --------------------------------------------------
     # The stack is assembled per agent from the chain, not assumed:
@@ -240,6 +261,27 @@ class Agent:
             raise ManifestError(f"{where}: reply_mode/require_mention are only implemented for mattermost")
         if self.raw.get("role") == "apprentice" and not self.raw.get("owner"):
             raise ManifestError(f"{where}: role apprentice requires owner (an immutable platform user id)")
+        if self.browser and "browser" not in self.toolkits:
+            raise ManifestError(f"{where}: browser settings require agent-level `toolkits: [browser]`")
+        if "novnc" in self.browser and not isinstance(self.browser["novnc"], bool):
+            raise ManifestError(f"{where}: browser.novnc must be true or false")
+        if self.voice and not isinstance(self.raw.get("voice"), dict):
+            raise ManifestError(f"{where}: voice must be a mapping")
+        unknown_voice = sorted(set(self.voice) - {"enabled", "provider", "language", "model", "tts"})
+        if unknown_voice:
+            raise ManifestError(f"{where}: unknown voice settings: {', '.join(unknown_voice)}")
+        for key in ("enabled", "tts"):
+            if key in self.voice and not isinstance(self.voice[key], bool):
+                raise ManifestError(f"{where}: voice.{key} must be true or false")
+        provider = str(self.voice.get("provider") or "local")
+        if provider not in KNOWN_STT_PROVIDERS:
+            raise ManifestError(
+                f"{where}: voice.provider {provider!r} is unknown "
+                f"(known: {', '.join(sorted(KNOWN_STT_PROVIDERS))})"
+            )
+        for key in ("language", "model"):
+            if key in self.voice and not str(self.voice[key]).strip():
+                raise ManifestError(f"{where}: voice.{key} must be a non-empty string")
         for briefing in self.memory.get("briefings") or []:
             if not isinstance(briefing, dict) or not briefing.get("date") or not briefing.get("text"):
                 raise ManifestError(f"{where}: each memory.briefings entry needs date and text")
@@ -373,10 +415,69 @@ class Fleet:
                 f"toolkit {name!r} is referenced but toolkits/{name}/toolkit.yaml does not exist"
             )
         spec = _load_yaml(f)
-        allowed = {"description", "apt", "npm", "uv_tools", "env", "dockerfile", "mcp"}
+        allowed = {
+            "description",
+            "apt",
+            "npm",
+            "uv_tools",
+            "env",
+            "dockerfile",
+            "mcp",
+            "models",
+            "model_check",
+        }
         unknown = set(spec) - allowed
         if unknown:
             raise ManifestError(f"{f}: unknown toolkit key(s): {', '.join(sorted(unknown))}")
+        model_paths = set()
+        for model in spec.get("models") or []:
+            if not isinstance(model, dict):
+                raise ManifestError(f"{f}: every model must be a mapping")
+            required = {"name", "repo", "path", "files"}
+            missing = sorted(required - set(model))
+            if missing:
+                raise ManifestError(f"{f}: model is missing {', '.join(missing)}")
+            unknown_model = sorted(set(model) - required - {"gated", "tier"})
+            if unknown_model:
+                raise ManifestError(
+                    f"{f}: model {model['name']!r} has unknown keys: {', '.join(unknown_model)}"
+                )
+            for field_name in ("name", "repo", "path"):
+                if not isinstance(model[field_name], str) or not model[field_name].strip():
+                    raise ManifestError(f"{f}: model {field_name} must be a non-empty string")
+            model_path = Path(model["path"])
+            if model_path.is_absolute() or not model_path.parts or ".." in model_path.parts:
+                raise ManifestError(f"{f}: model {model['name']!r} has unsafe path {model['path']!r}")
+            if model["path"] in model_paths:
+                raise ManifestError(f"{f}: duplicate model path {model['path']!r}")
+            model_paths.add(model["path"])
+            if not isinstance(model["files"], list) or not model["files"]:
+                raise ManifestError(f"{f}: model {model['name']!r} needs a non-empty files list")
+            for relative in model["files"]:
+                file_path = Path(str(relative))
+                if (
+                    not isinstance(relative, str)
+                    or not relative.strip()
+                    or file_path.is_absolute()
+                    or not file_path.parts
+                    or ".." in file_path.parts
+                ):
+                    raise ManifestError(
+                        f"{f}: model {model['name']!r} has unsafe file path {relative!r}"
+                    )
+            if "gated" in model and not isinstance(model["gated"], bool):
+                raise ManifestError(f"{f}: model {model['name']!r} gated must be true or false")
+            if "tier" in model and (
+                not isinstance(model["tier"], str) or not model["tier"].strip()
+            ):
+                raise ManifestError(f"{f}: model {model['name']!r} tier must be a string")
+        check = spec.get("model_check")
+        if spec.get("models") and (
+            not isinstance(check, list)
+            or not check
+            or not all(isinstance(part, str) and part for part in check)
+        ):
+            raise ManifestError(f"{f}: a toolkit with models needs a non-empty model_check command")
         for server in spec.get("mcp") or []:
             if not isinstance(server, dict) or not server.get("name"):
                 raise ManifestError(f"{f}: every mcp entry must be a mapping with a name")
@@ -441,6 +542,12 @@ class Fleet:
             raise ManifestError(f"{where}: roster.mode must be full, brief or off")
         if not self.agents:
             raise ManifestError(f"{self.root}: no agents/*/agent.yaml found")
+        heavy_agent_toolkits = sorted({"browser", "transcribe"} & set(self.image_toolkits))
+        if heavy_agent_toolkits:
+            raise ManifestError(
+                f"{where}: {', '.join(heavy_agent_toolkits)} is intentionally agent-level; "
+                "remove it from image.toolkits"
+            )
         for t in self.image_toolkits:
             self.load_toolkit(t)  # raises with the toolkit's name when missing
         seen: dict[str, str] = {}

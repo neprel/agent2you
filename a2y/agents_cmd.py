@@ -177,6 +177,12 @@ def cmd_agent_add(ns: argparse.Namespace) -> int:
     if agent.access.get("github_token"):
         print(f"  {step}. set {p}_GH_TOKEN (fine-grained PAT scoped to its repositories)")
         step += 1
+    if agent.toolkits:
+        print(f"  {step}. `a2y build` on the Docker host")
+        step += 1
+    if agent.model_specs:
+        print(f"  {step}. `a2y models pull {name}` on the Docker host")
+        step += 1
     print(f"  {step}. `a2y up {name}`")
     step += 1
     print(f"  {step}. `a2y auth {name}` -- sign the brains in (device-code flows)")

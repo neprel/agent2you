@@ -74,6 +74,17 @@ MATTERMOST_PLUGINS = [
     "steer-into-turn",  # /steer lands INSIDE the running ACP turn
 ]
 
+STT_PROVIDER_KEYS = {
+    "groq": "GROQ_API_KEY",
+    # Hermes deliberately uses a voice-specific name so a chat voice note can
+    # never turn OPENAI_API_KEY into an accidental paid coding credential.
+    "openai": "VOICE_TOOLS_OPENAI_KEY",
+    "mistral": "MISTRAL_API_KEY",
+    "xai": "XAI_API_KEY",
+    "elevenlabs": "ELEVENLABS_API_KEY",
+    "deepinfra": "DEEPINFRA_API_KEY",
+}
+
 
 def _dump(data: dict, header: str = GENERATED) -> str:
     return header + yaml.safe_dump(data, sort_keys=False, allow_unicode=True, width=100)
@@ -369,6 +380,20 @@ def render_hermes_config(agent: Agent) -> str:
         "plugins": {"enabled": plugins},
         "telemetry": {"shared_metrics": {"enabled": False}},
     }
+    if agent.voice:
+        provider = str(agent.voice.get("provider") or "local")
+        stt: dict = {
+            "enabled": agent.voice.get("enabled", True),
+            "provider": provider,
+        }
+        if agent.voice.get("language"):
+            stt["language"] = str(agent.voice["language"])
+        if agent.voice.get("model"):
+            stt[provider] = {"model": str(agent.voice["model"])}
+        data["stt"] = stt
+        if agent.voice.get("tts"):
+            data["tts"] = {"provider": "edge"}
+            data["voice"] = {"auto_tts": True}
     if fleet.platform_kind == "mattermost":
         data["platform_toolsets"] = {"mattermost": ["hermes-mattermost"]}
         # Three display settings are DISCARDED on Mattermost unless the platform
@@ -535,6 +560,9 @@ def _agent_service(agent: Agent) -> dict:
         "CLINE_NO_AUTO_UPDATE": "1",
         "A2Y_ROSTER_MODE": str((fleet.raw.get("roster") or {}).get("mode") or "full"),
     }
+    voice_key = STT_PROVIDER_KEYS.get(str(agent.voice.get("provider") or "local"))
+    if voice_key:
+        env[voice_key] = f"${{{voice_key}}}"
     prometheus_url = (fleet.raw.get("metrics") or {}).get("prometheus_url")
     if prometheus_url:
         env["A2Y_PROMETHEUS_URL"] = str(prometheus_url)
@@ -695,6 +723,13 @@ def _agent_service(agent: Agent) -> dict:
     if agent.access.get("ssh"):
         volumes.append(f"{state}/ssh:/root/.ssh")
     volumes.append(f"{state}/workspace:/work")
+    if "browser" in agent.toolkits:
+        volumes += [
+            f"{state}/browser:/browser",
+            f"{state}/browser/x11:/tmp/.X11-unix",
+        ]
+    if agent.model_specs:
+        volumes.append("../volumes/models:/models:ro")
 
     # An agent with toolkits of its own runs a derived image, built by
     # `a2y build` FROM the fleet image and tagged with the agent's name.
@@ -756,11 +791,45 @@ def _agent_service(agent: Agent) -> dict:
             service["network_mode"] = fleet.network_mode
     else:
         service["networks"] = ["a2y"]
+    if agent.browser_novnc:
+        service.setdefault("depends_on", {})[f"browser-{agent.name}"] = {
+            "condition": "service_healthy"
+        }
     return service
+
+
+def _browser_sidecar(agent: Agent) -> dict:
+    state = f"../volumes/{agent.container}"
+    return {
+        "container_name": f"browser-{agent.name}",
+        "image": f"${{A2Y_IMAGE}}-{agent.name}",
+        "restart": "unless-stopped",
+        # The agent image has its own entrypoint; overriding only `command`
+        # would still boot the full agent and never start noVNC.
+        "entrypoint": ["/usr/bin/tini", "--", "/usr/local/bin/a2y-browser-novnc"],
+        "environment": [
+            f"A2Y_NOVNC_PASSWORD=${{{agent.env_prefix}_BROWSER_NOVNC_PASSWORD}}"
+        ],
+        "volumes": [
+            f"{state}/browser:/browser",
+            f"{state}/browser/x11:/tmp/.X11-unix",
+        ],
+        "ports": [f"127.0.0.1:${{{agent.env_prefix}_BROWSER_NOVNC_PORT}}:6080"],
+        "healthcheck": {
+            "test": ["CMD-SHELL", "curl -fsS http://127.0.0.1:6080/vnc.html >/dev/null"],
+            "interval": "10s",
+            "timeout": "3s",
+            "retries": 12,
+            "start_period": "20s",
+        },
+    }
 
 
 def render_compose(fleet: Fleet) -> str:
     data: dict = {"services": {a.container: _agent_service(a) for a in fleet.agents}}
+    for agent in fleet.agents:
+        if agent.browser_novnc:
+            data["services"][f"browser-{agent.name}"] = _browser_sidecar(agent)
     if not fleet.shared_namespace:
         data["networks"] = {"a2y": {"name": f"{fleet.name}_net"}}
     vpn = fleet.network.get("vpn_service")
@@ -844,6 +913,11 @@ def render_example_env(fleet: Fleet) -> str:
             if a.executors[ex].get("api_key_env")
         }
     )
+    key_envs += [
+        STT_PROVIDER_KEYS[provider]
+        for a in fleet.agents
+        if (provider := str(a.voice.get("provider") or "local")) in STT_PROVIDER_KEYS
+    ]
     refs = set()
     pattern = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
     for a in fleet.agents:
@@ -852,9 +926,16 @@ def render_example_env(fleet: Fleet) -> str:
             refs.update(pattern.findall(json.dumps({"env": spec.get("env"), "mcp": spec.get("mcp")})))
     key_envs = sorted(set(key_envs) | refs)
     if key_envs:
-        lines.append("# --- API keys for kind: openai executors ---")
+        lines.append("# --- API keys used by explicitly configured executors/toolkits/voice STT ---")
         lines += [f"{k}=" for k in key_envs]
         lines.append("")
+    if any("transcribe" in agent.toolkits for agent in fleet.agents):
+        lines += [
+            "# --- Optional build-only diarization quality tier ---",
+            "# Free HF read token after accepting pyannote/community-1 terms; used only by models pull.",
+            "HF_TOKEN=",
+            "",
+        ]
     for a in fleet.agents:
         p = a.env_prefix
         lines.append(f"# --- {a.name} ---")
@@ -879,6 +960,12 @@ def render_example_env(fleet: Fleet) -> str:
         if a.access.get("github_token"):
             lines.append("# Fine-grained PAT scoped to the repositories this agent owns.")
             lines.append(f"{p}_GH_TOKEN=")
+        if a.browser_novnc:
+            lines += [
+                "# Browser supervision/login UI; bound to 127.0.0.1 only.",
+                f"{p}_BROWSER_NOVNC_PORT=6080",
+                f"{p}_BROWSER_NOVNC_PASSWORD=",
+            ]
         lines.append("")
     return "\n".join(lines) + "\n"
 
@@ -973,13 +1060,13 @@ def render_build_files(fleet: Fleet) -> dict[str, str]:
     out: dict[str, str] = {}
     tag = fleet.image_tag
     if fleet.image_toolkits:
-        body = GENERATED + f"FROM {tag}-base\n\n"
+        body = "# syntax=docker/dockerfile:1.7\n" + GENERATED + f"FROM {tag}-base\n\n"
         body += "\n".join(_toolkit_snippet(fleet.load_toolkit(t)) for t in fleet.image_toolkits)
         out["build/fleet.dockerfile"] = body
     for agent in fleet.agents:
         if not agent.toolkits:
             continue
-        body = GENERATED + f"FROM {tag}\n\n"
+        body = "# syntax=docker/dockerfile:1.7\n" + GENERATED + f"FROM {tag}\n\n"
         body += "\n".join(_toolkit_snippet(fleet.load_toolkit(t)) for t in agent.toolkits)
         out[f"build/agent-{agent.name}.dockerfile"] = body
     return out
@@ -1077,6 +1164,11 @@ def ensure_volumes(fleet: Fleet) -> list[Path]:
     `a2y up` so a fresh checkout starts without a .gitkeep ritual. Markers stop
     at the service directory on purpose -- containers own everything below."""
     created = []
+    if any(agent.model_specs for agent in fleet.agents):
+        models = fleet.root / "volumes" / "models"
+        if not models.is_dir():
+            models.mkdir(parents=True, exist_ok=True)
+            created.append(models)
     for agent in fleet.agents:
         base = fleet.root / "volumes" / agent.container
         subs = ["claude", "codex", "opencode", "cline", "gh", "tea", "hermes", "workspace"]
@@ -1084,6 +1176,8 @@ def ensure_volumes(fleet: Fleet) -> list[Path]:
             subs.append("memory")
         if agent.access.get("ssh"):
             subs.append("ssh")
+        if "browser" in agent.toolkits:
+            subs += ["browser", "browser/x11"]
         for sub in subs:
             d = base / sub
             if not d.is_dir():

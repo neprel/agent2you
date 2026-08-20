@@ -58,3 +58,25 @@ def test_agent_add_requires_description(tmp_path: Path) -> None:
     init_workspace(ws, name="f")
     assert run(ws, "agent", "add", "nameless") == 2
     assert not (ws / "agents" / "nameless").exists()
+
+
+def test_agent_add_names_build_and_model_pull_for_model_toolkit(tmp_path: Path, capsys) -> None:
+    ws = tmp_path / "f"
+    ws.mkdir()
+    init_workspace(ws, name="f")
+    assert (
+        run(
+            ws,
+            "agent",
+            "add",
+            "scribe",
+            "--description",
+            "Long recording transcription.",
+            "--toolkits",
+            "transcribe",
+        )
+        == 0
+    )
+    output = capsys.readouterr().out
+    assert "`a2y build` on the Docker host" in output
+    assert "`a2y models pull scribe` on the Docker host" in output

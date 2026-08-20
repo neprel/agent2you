@@ -89,7 +89,8 @@ ARG YARN_VERSION=4.18.0
 # against the fleet workspace cloned into /work. Building images and starting
 # containers stay OUTSIDE (no docker socket in here, ever); the supervisor
 # prepares, the operator or CI executes.
-ARG AGENT2YOU_VERSION=1.4.2
+ARG AGENT2YOU_VERSION=1.5.0
+LABEL org.agent2you.version="${AGENT2YOU_VERSION}"
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -104,6 +105,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git openssh-client ripgrep jq less procps \
         python3 python3-venv python3-dev build-essential supervisor tini \
+        ffmpeg=7:6.1.1-3ubuntu5 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=node_source /usr/local /usr/local

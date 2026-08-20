@@ -64,6 +64,18 @@ copied from the deploy tree on every start**, overwriting whatever the volume
 holds — an identity that drifts inside a volume is one nobody can review.
 Deploy = re-render + restart.
 
+The pack version follows the same invariant as tool pins. Build injects the
+installed distribution version into the Docker ARG and OCI label for the base,
+fleet and per-agent derived images. Doctor compares that label with both the
+CLI and workspace stamp, while release CI rejects tag/metadata/Dockerfile skew.
+
+Heavy capabilities stay agent-level. A browser agent receives a persistent,
+dedicated profile and optionally a loopback-only noVNC sidecar; other agents do
+not inherit Chromium or its cookies. A transcription agent receives pinned
+ASR/diarization code plus a read-only mount of the shared host model store;
+large weights are pulled explicitly and independently of image rebuilds. Short
+voice-note STT remains a gateway feature in the common base image.
+
 The agents run as **root inside their container**. A prompt injection is a
 container compromise; the accepted boundary is the container plus `/work`.
 Never mount the operator's checkout or the docker socket into an agent.
@@ -178,6 +190,11 @@ Memory is deliberately **not load-bearing**: an agent whose memory server is
 down loses recall and keeps everything else. Its extraction LLM must never be a
 coding CLI — that would spawn a Claude Code process to summarise a chat message
 out of a paid subscription. Point Hindsight at a small local model.
+
+The local HINT memory index is currently text-only FTS. If a MiniLM-class
+embedding index is enabled later, its weights use the same `volumes/models/`
+store, `a2y models pull`, read-only mount and post-pull load check as the
+transcription toolkit—there is deliberately no second model-delivery path.
 
 Do not treat memory as a source of truth about live state: it records what was
 said, imperfectly reconciled. For what is true, the agents have a shell.

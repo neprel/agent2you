@@ -1,6 +1,6 @@
 [project]
 name = "agent2you"
-version = "1.4.2"
+version = "1.5.0"
 description = "Deploy a team of chat-resident AI agents from declarative manifests: Hermes + litellm + acp2api + subscription coding CLIs, one container per agent."
 readme = "README.md"
 license = "MIT"
@@ -43,6 +43,9 @@ packages = ["a2y"]
 # The image build context is data: `a2y init` vendors it into each fleet
 # workspace, where it becomes the user's to edit.
 a2y = ["image/*", "image/**/*", "toolkits/*", "toolkits/**/*", "platforms/*", "platforms/**/*", "fleet_workflows/*", "fleet_workflows/**/*", "duty-templates.yaml", "bootstrap.md"]
+
+[tool.setuptools.exclude-package-data]
+a2y = ["**/__pycache__/*", "**/*.pyc"]
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.12"]

@@ -9,6 +9,23 @@ Last full audit against upstream main: **2026-08-19** (v2026.8.18, ~30k-line
 gateway grepped, quotes verified). Verdict: **all six gaps still open** for the
 Mattermost path. Details per plugin:
 
+# image build warnings {#image_build_warnings}
+
+Hermes' installer probes ffmpeg and used to warn after the base apt lists had
+already been removed. That warning was functional, not cosmetic: cloud STT
+transcoding, silence trimming, duration probes and Opus TTS could degrade. The
+base image now installs the exact Noble package `ffmpeg=7:6.1.1-3ubuntu5`
+before invoking the installer.
+
+The npm install currently emits a `node-domexception` deprecation from an
+upstream transitive dependency. It is retained because none of our direct pins
+select it and the installed CLIs pass their executable smoke checks. npm may
+also report packages whose lifecycle scripts are restricted; the image's
+explicit Claude SDK binary check and CLI smoke checks are the authority. Do not
+globally enable lifecycle scripts: that would widen build-time code execution
+for every dependency. Revisit the individual allowlist only when one of those
+checks demonstrates a missing artifact.
+
 * **conversation-key** — puts Hermes' session id on the wire as
   `x-conversation-id`. Upstream custom providers gained only STATIC
   `extra_headers` (fixed per profile, `normalize_extra_headers`), nothing per

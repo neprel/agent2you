@@ -82,6 +82,25 @@ default set in the base image (git, gh, tea, openspec, spec-kit, hint, …) is
 just the floor — a fleet that wants a leaner base edits the vendored
 dockerfile and re-adds what it needs as toolkits.
 
+Two bundled agent-level toolkits are intentionally opt-in:
+
+- `browser` installs a checksum-verified headed Chromium and Playwright MCP.
+  It persists cookies in the agent's `browser` volume. Add `browser: {novnc:
+  true}` only when an operator needs to complete a login; the generated noVNC
+  endpoint binds to `127.0.0.1`, requires its own password, and shares only the
+  browser profile/X11 volumes. The browser runs with `--no-sandbox`: granting
+  `SYS_ADMIN` or `privileged` would weaken the whole container more than the
+  Chromium sandbox helps. Treat the container boundary and dedicated agent
+  identity as the security boundary, and never expose noVNC publicly.
+- `transcribe` installs only pinned WhisperX/faster-whisper/pyannote code.
+  `a2y models pull <agent>` downloads the compatible model set once into the
+  shared host-side `volumes/models/` store, records the actual revision and
+  hashes, and proves it loads in the derived image with networking disabled.
+  Agents receive `/models` read-only and never download weights themselves.
+  Ungated MFCC diarization is the default; an `HF_TOKEN` available only to the
+  host pull command adds pyannote `community-1`. It is for long recordings
+  delivered as files; ordinary chat voice notes use Hermes STT.
+
 ## The image (vendored, yours)
 
 `a2y init` copies `image/` into the fleet workspace. For a tool one fleet or
@@ -136,6 +155,13 @@ copy. Unmodified files update automatically; local edits produce a unified diff
 and remain untouched unless `--force`. `fleet.yaml`, `agents/`, `toolkits/`,
 `SOUL-shared.md`, `banks/` are user-owned. `deploy/` is generated and pruned by
 render, never upgraded.
+
+`a2y build` passes the installed pack version as `AGENT2YOU_VERSION` to every
+base and derived Docker build, and the image publishes it as the OCI label
+`org.agent2you.version`. A development checkout whose installed metadata is a
+`.dev`/local version falls back loudly to the vendored Dockerfile default; use
+`a2y build --a2y-version X.Y.Z` only when that exact release exists on PyPI.
+Release CI refuses a tag if `pyproject.toml`, the tag, and the Docker ARG differ.
 
 ## Recording what you learn
 

@@ -1,0 +1,92 @@
+description: Stateful headed Chromium through the Playwright MCP server
+npm: ["@playwright/mcp@0.0.79"]
+env:
+  DISPLAY: ":99"
+  PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+mcp:
+  - name: browser
+    command: a2y-browser-mcp
+dockerfile: |
+  # @playwright/mcp 0.0.79 pins Playwright 1.63.0-alpha-2026-08-05,
+  # Chromium 152.0.7977.8 (revision 1237). Playwright selects the matching
+  # archive per architecture; verify the installed executable itself.
+  ARG A2Y_CHROMIUM_AMD64_SHA256=5ba22c3d2a8c6ee5a940193c8060665dead08796288afa5ae7a524eeb3ccdd3f
+  ARG A2Y_CHROMIUM_ARM64_SHA256=b49d56276fc41584a982d9db83a0727b662878f72399798bb7243a2f49889499
+  RUN /usr/local/lib/node_modules/@playwright/mcp/node_modules/.bin/playwright \
+        install --with-deps --no-shell chromium \
+      && apt-get update \
+      && apt-get install -y --no-install-recommends x11vnc novnc websockify x11-utils \
+      && rm -rf /var/lib/apt/lists/* \
+      && browser="$(find /ms-playwright/chromium-1237 -type f -name chrome -perm -111 | head -1)" \
+      && test -n "$browser" \
+      && case "$(dpkg --print-architecture)" in \
+           amd64) expected="$A2Y_CHROMIUM_AMD64_SHA256" ;; \
+           arm64) expected="$A2Y_CHROMIUM_ARM64_SHA256" ;; \
+           *) echo "unsupported browser architecture" >&2; exit 1 ;; \
+         esac \
+      && echo "$expected  $browser" | sha256sum -c -
+  RUN <<'SCRIPT'
+  set -eu
+  cat >/usr/local/bin/a2y-browser-mcp <<'EOF'
+  #!/bin/sh
+  set -eu
+  mkdir -p /browser/profile /work/browser-downloads /tmp/.X11-unix
+  if ! xdpyinfo -display "${DISPLAY:-:99}" >/dev/null 2>&1; then
+    Xvfb "${DISPLAY:-:99}" -screen 0 1440x900x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &
+    i=0
+    until xdpyinfo -display "${DISPLAY:-:99}" >/dev/null 2>&1; do
+      i=$((i + 1)); [ "$i" -lt 50 ] || { cat /tmp/xvfb.log >&2; exit 1; }
+      sleep 0.1
+    done
+  fi
+  exec playwright-mcp --browser chromium --no-sandbox \
+    --user-data-dir /browser/profile --output-dir /work/browser-downloads \
+    --viewport-size 1440x900
+  EOF
+  cat >/usr/local/bin/a2y-browser-novnc <<'EOF'
+  #!/bin/sh
+  set -eu
+  [ -n "${A2Y_NOVNC_PASSWORD:-}" ] || { echo "A2Y_NOVNC_PASSWORD is empty" >&2; exit 1; }
+  mkdir -p /browser/profile /browser/x11 /tmp/.X11-unix
+  rm -f /tmp/.X11-unix/X99 /tmp/.X99-lock
+  Xvfb :99 -screen 0 1440x900x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &
+  i=0
+  until xdpyinfo -display :99 >/dev/null 2>&1; do
+    i=$((i + 1)); [ "$i" -lt 100 ] || { cat /tmp/xvfb.log >&2; exit 1; }
+    sleep 0.1
+  done
+  x11vnc -storepasswd "$A2Y_NOVNC_PASSWORD" /browser/x11vnc.pass >/dev/null
+  x11vnc -display :99 -rfbauth /browser/x11vnc.pass -forever -shared \
+    -localhost -bg -o /tmp/x11vnc.log
+  exec websockify --web=/usr/share/novnc 6080 localhost:5900
+  EOF
+  cat >/usr/local/bin/a2y-browser-check <<'EOF'
+  #!/bin/sh
+  set -eu
+  mkdir -p /browser/profile /tmp/.X11-unix
+  playwright-mcp --version >/dev/null
+  request='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"a2y-doctor","version":"1"}}}'
+  response="$(printf '%s\n' "$request" | timeout 30 playwright-mcp \
+    --browser chromium --headless --no-sandbox --isolated)"
+  printf '%s\n' "$response" | grep -q '"id":1'
+  if ! xdpyinfo -display "${DISPLAY:-:99}" >/dev/null 2>&1; then
+    Xvfb "${DISPLAY:-:99}" -screen 0 1440x900x24 -nolisten tcp >/tmp/xvfb-check.log 2>&1 &
+    i=0
+    until xdpyinfo -display "${DISPLAY:-:99}" >/dev/null 2>&1; do
+      i=$((i + 1)); [ "$i" -lt 50 ] || { cat /tmp/xvfb-check.log >&2; exit 1; }
+      sleep 0.1
+    done
+  fi
+  test -w /browser/profile
+  node <<'JS'
+  let api;
+  try { api = require('/usr/local/lib/node_modules/@playwright/mcp/node_modules/playwright'); }
+  catch (_) { api = require('/usr/local/lib/node_modules/playwright'); }
+  (async () => {
+    const browser = await api.chromium.launch({headless: false, args: ['--no-sandbox']});
+    await browser.close();
+  })().catch(error => { console.error(error); process.exit(1); });
+  JS
+  EOF
+  chmod 0755 /usr/local/bin/a2y-browser-mcp /usr/local/bin/a2y-browser-novnc /usr/local/bin/a2y-browser-check
+  SCRIPT

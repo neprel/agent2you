@@ -19,8 +19,10 @@ fleet.yaml).
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -115,6 +117,29 @@ def cmd_build(ns: argparse.Namespace) -> int:
     if not dockerfile.is_file():
         print(f"{dockerfile} not found -- was this workspace created by `a2y init`?", file=sys.stderr)
         return 1
+    installed = importlib.metadata.version("agent2you")
+    match = re.search(r"^ARG AGENT2YOU_VERSION=(\S+)$", dockerfile.read_text(), re.M)
+    fallback = match.group(1) if match else ""
+    release_version = bool(re.fullmatch(r"\d+(?:\.\d+)*(?:\.post\d+)?", installed))
+    if ns.a2y_version:
+        image_a2y_version = ns.a2y_version
+    elif release_version:
+        image_a2y_version = installed
+    elif fallback:
+        image_a2y_version = fallback
+        print(
+            f"NOTE: running a2y {installed}; container gets {fallback} from the dockerfile "
+            "-- pass --a2y-version to override. It matches that version as published, "
+            "not this checkout.",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"cannot select in-container a2y for development version {installed}: "
+            "the dockerfile has no AGENT2YOU_VERSION default; pass --a2y-version",
+            file=sys.stderr,
+        )
+        return 1
     render_fleet(fleet)  # the derived toolkit dockerfiles live in deploy/build/
 
     tag = fleet.image_tag
@@ -131,7 +156,16 @@ def cmd_build(ns: argparse.Namespace) -> int:
 
     def build_one(item) -> int:
         df, t, ctx = item
-        cmd = ["docker", "build", "-f", str(df), "-t", t]
+        cmd = [
+            "docker",
+            "build",
+            "--build-arg",
+            f"AGENT2YOU_VERSION={image_a2y_version}",
+            "-f",
+            str(df),
+            "-t",
+            t,
+        ]
         if ns.no_cache:
             cmd.append("--no-cache")
         cmd.append(str(ctx))
@@ -414,7 +448,12 @@ def cmd_rebuild(ns: argparse.Namespace) -> int:
         if not ns.no_backup:
             archive = create_backup(fleet, name, fleet.root / "backup")
             print(f"  snapshot {archive}")
-        build_ns = argparse.Namespace(no_cache=ns.no_cache, parallel=1, i_know_my_mounts=ns.i_know_my_mounts)
+        build_ns = argparse.Namespace(
+            no_cache=ns.no_cache,
+            parallel=1,
+            i_know_my_mounts=ns.i_know_my_mounts,
+            a2y_version=None,
+        )
         if cmd_build(build_ns):
             return 1
         if _compose(fleet, "up", "-d", "--force-recreate", f"agent-{name}"):
@@ -454,6 +493,7 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(fn=cmd_render)
 
     p = sub.add_parser("build", help="build the agent image")
+    p.add_argument("--a2y-version", help="explicit in-container agent2you version")
     p.add_argument("--no-cache", action="store_true")
     p.add_argument("--parallel", type=int, default=1)
     p.add_argument("--i-know-my-mounts", action="store_true")
@@ -501,6 +541,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-cache", action="store_true")
     p.add_argument("--i-know-my-mounts", action="store_true")
     p.set_defaults(fn=cmd_rebuild)
+
+    p = sub.add_parser("models", help="manage the shared host-side model store")
+    msub = p.add_subparsers(dest="models_cmd", required=True)
+    pull_p = msub.add_parser("pull", help="NETWORK: download models and verify them offline")
+    pull_p.add_argument("agents", nargs="*", help="agents whose toolkit models should be pulled")
+    pull_p.add_argument("--agent", help="one agent (equivalent to a positional name)")
+    from .models import cmd_models_pull
+
+    pull_p.set_defaults(fn=cmd_models_pull)
 
     p = sub.add_parser("knowledge", help="curate local HINT memory")
     ksub = p.add_subparsers(dest="knowledge_cmd", required=True)
