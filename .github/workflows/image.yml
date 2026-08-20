@@ -9,8 +9,29 @@ on:
     types: [completed]
 
 jobs:
-  build:
+  package-ready:
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: astral-sh/setup-uv@eb1897b8dc4b5d5bfe39a428a8f2304605e0983c # v7.0.0
+      - name: Wait for the release to reach the package index
+        shell: bash
+        run: |
+          version="$(grep -m1 '^version' pyproject.toml | cut -d'"' -f2)"
+          for attempt in $(seq 1 30); do
+            if uvx --isolated --no-cache --from "agent2you==${version}" a2y --version; then
+              exit 0
+            fi
+            echo "agent2you ${version} is not resolvable yet (attempt ${attempt}/30)"
+            sleep 10
+          done
+          exit 1
+
+  build:
+    needs: package-ready
     strategy:
       fail-fast: false
       matrix:
