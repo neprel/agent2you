@@ -58,11 +58,12 @@ from file presence, and the healthcheck probes the topmost process that exists
 (litellm → acp2api → the A2A card). Fallback order is the chain's order, per
 agent, with no length limit.
 
-The **image bakes everything in and pins every version**; the logins live in
-volumes so a rebuild never signs an agent out; the **identity (config, SOUL) is
-copied from the deploy tree on every start**, overwriting whatever the volume
-holds — an identity that drifts inside a volume is one nobody can review.
-Deploy = re-render + restart.
+The **image bakes runtime code in and pins every version**; deliberately large
+model weights are the exception and use the read-only host model store. Logins
+live in volumes so a rebuild never signs an agent out; the **identity (config,
+SOUL) is copied from the deploy tree on every start**, overwriting whatever the
+volume holds — an identity that drifts inside a volume is one nobody can
+review. Deploy = re-render + restart.
 
 The pack version follows the same invariant as tool pins. Build injects the
 installed distribution version into the Docker ARG and OCI label for the base,

@@ -121,6 +121,32 @@ are recorded, and the pinned toolkit runtime loads them once offline before the
 store is accepted. Without a token the equally valid `fallback` tier is pulled
 and one informational upgrade pointer is printed.
 
+### Browser login and supervision
+
+Give the browser only to the designated agent that needs web sessions:
+
+```yaml
+toolkits: [browser]
+browser:
+  novnc: true
+```
+
+Run `a2y render && a2y build`, copy the newly rendered browser variables from
+`deploy/example.env` to `deploy/.env`, and set a strong
+`AGENT_<NAME>_BROWSER_NOVNC_PASSWORD`. After `a2y up`, open the loopback URL
+shown by `AGENT_<NAME>_BROWSER_NOVNC_PORT`, enter that password, and sign into
+the website yourself. The agent never receives or types the operator's
+password; the resulting cookies persist in
+`volumes/agent-<name>/browser/profile` across container restarts.
+
+The generated endpoint is loopback-only. On a remote Docker host, forward it
+over SSH instead of changing the bind address, for example
+`ssh -L 6080:127.0.0.1:6080 host`, then open
+`http://127.0.0.1:6080/vnc.html`. Set `browser.novnc: false`, rerender and run
+`a2y up` when the login/supervision window is no longer needed; the persistent
+profile remains. Treat its backup as credential material and never expose
+noVNC directly to the internet.
+
 ## 2. Brains (the step nobody can automate)
 
 `a2y auth <agent>` prints per-agent instructions. The rules that matter:

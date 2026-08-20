@@ -94,6 +94,30 @@ count before sending and evaluates only deterministic contracts (`refuses`,
 an ordinary dedicated drill user token and channel id as `A2Y_DRILL_TOKEN` and
 `A2Y_DRILLS_CHANNEL`; no synthetic transport is substituted for evidence.
 
+## Release and image compatibility
+
+The release artifact is the `agent2you` Python distribution: a `vX.Y.Z` tag
+runs tests, verifies that the tag, `pyproject.toml` and the base
+Dockerfile's `AGENT2YOU_VERSION` agree, builds wheel + sdist, and publishes them
+to PyPI with GitHub OIDC trusted publishing. No long-lived PyPI token exists.
+The wheel contains the vendored image, platform and toolkit templates used by
+`a2y init` and `a2y upgrade`.
+
+Docker images are intentionally **not** published by this repository. A real
+fleet can change its vendored image, enable fleet-wide toolkits and create
+per-agent derived images, so the deployable artifact is built on the target
+Docker host with `a2y build`. Its `org.agent2you.version` label makes the exact
+pack/image relationship visible to doctor.
+
+`.github/workflows/image.yml` is compatibility testing, not deployment. It
+runs weekly or by `workflow_dispatch`, builds the complete base plus bundled
+browser/transcribe derived images natively on standard AMD64 and ARM64 runners,
+and performs runtime smoke checks. It pushes nothing to a registry. Only one
+compatibility run stays active and each architecture has a 120-minute ceiling;
+ordinary tagged PyPI releases do not wait for it. Run it manually before a tag
+when an image/toolkit pin changed and immediate cross-architecture evidence is
+required.
+
 ## Hosts, resources and networks
 
 Run `a2y` on the Docker daemon host. Remote Docker contexts are refused because
