@@ -10,3 +10,6 @@ build/
 # A fleet workspace created inside this repo for testing. Real fleets live in
 # their own repositories (see `a2y init`).
 /tmp-fleet*/
+
+# Local implementation plans (working notes for agents; not part of the pack).
+/plans/
