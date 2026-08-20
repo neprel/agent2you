@@ -143,7 +143,7 @@ log "Step 3d: Reconciling declarative Hermes duties (UTC)"
 if [ -d /opt/agent/plugins ]; then
     mkdir -p "${HERMES_HOME}/plugins"
     cp -a /opt/agent/plugins/. "${HERMES_HOME}/plugins/"
-    log "  plugins: $(ls /opt/agent/plugins | tr '\n' ' ')"
+    log "  plugins: $(find /opt/agent/plugins -mindepth 1 -maxdepth 1 -printf '%f ')"
 fi
 
 if [ -f "${AGENT_CONFIG_DIR}/hindsight.json" ]; then
