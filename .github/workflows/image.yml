@@ -3,14 +3,14 @@ name: image compatibility
 on:
   schedule:
     - cron: "17 4 * * 1"
-  push:
-    branches: [main]
-    paths:
-      - "a2y/image/**"
-      - ".github/workflows/image.yml"
+  workflow_dispatch:
+  workflow_run:
+    workflows: [release]
+    types: [completed]
 
 jobs:
   build:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     strategy:
       fail-fast: false
       matrix:
@@ -18,5 +18,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - name: Build the complete agent image
         run: docker build -f a2y/image/agent.dockerfile -t agent2you-ci a2y/image

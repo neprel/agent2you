@@ -40,6 +40,9 @@ duties:
     agent.write_text(agent.read_text().replace('"0 */4 * * *"', '"0 9 * * mon-fri"'))
     with pytest.raises(ManifestError, match="numeric five-field"):
         load_fleet(root)
+    agent.write_text(agent.read_text().replace('"0 9 * * mon-fri"', '"99 99 * * *"'))
+    with pytest.raises(ManifestError, match="not a valid cron"):
+        load_fleet(root)
 
 
 def test_fleet_workflows_are_pack_owned(tmp_path: Path):

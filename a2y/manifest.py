@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+from croniter import croniter
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 CRON_RE = re.compile(r"^[\d*/?,\-]+(?:\s+[\d*/?,\-]+){4}$")
@@ -271,6 +272,8 @@ class Agent:
                 raise ManifestError(
                     f"{where}: duty {name!r} schedule must be a numeric five-field cron expression (UTC)"
                 )
+            if not croniter.is_valid(schedule):
+                raise ManifestError(f"{where}: duty {name!r} schedule is not a valid cron expression")
             if not str(duty.get("channel") or "").strip():
                 raise ManifestError(f"{where}: duty {name!r} needs a non-empty channel")
             if not str(duty.get("instruction") or "").strip():
